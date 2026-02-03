@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Fire Risk Dashboard</title>
+
+  <link
+    rel="stylesheet"
+    href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+  />
+  <link
+    rel="stylesheet"
+    href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css"
+  />
+  <link
+    rel="stylesheet"
+    href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css"
+  />
+
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+<div id="sidebar">
+  <h1>🔥 Fire Risk</h1>
+
+  <div id="prediction-info" class="prediction-info"></div>
+
+  <label>Date</label>
+  <input type="date" id="datePicker" />
+
+  <div class="cards">
+    <div class="card low">LOW<br><span id="lowCount">0</span></div>
+    <div class="card med">MEDIUM<br><span id="medCount">0</span></div>
+    <div class="card high">HIGH<br><span id="highCount">0</span></div>
+  </div>
+
+  <div class="section">
+    <label>Source</label>
+    <input type="radio" name="source" value="predicted" checked> Predicted<br>
+    <input type="radio" name="source" value="observed"> Observed
+  </div>
+
+  <div class="section">
+    <label>View Mode</label>
+    <input type="radio" name="mode" value="point" checked> Point<br>
+    <input type="radio" name="mode" value="heat"> Heatmap
+  </div>
+
+  <div class="section">
+    <input type="checkbox" id="uncertaintyToggle">
+    Uncertainty Layer
+  </div>
+
+  <small>
+    • Point: click for detail<br>
+    • Heatmap: probability density<br>
+    • Uncertainty: model confidence
+  </small>
+</div>
+
+<div id="map"></div>
+
+<!-- Legend -->
+<div class="legend" id="legend-risk" style="display:none">
+  <div class="legend-title">Fire Risk</div>
+  <div class="legend-bar risk"></div>
+  <div class="legend-labels">
+    <span>Low</span><span>High</span>
+  </div>
+</div>
+
+<div class="legend" id="legend-uncertainty" style="display:none; bottom:140px;">
+  <div class="legend-title">Uncertainty</div>
+  <div class="legend-bar uncertainty"></div>
+  <div class="legend-labels">
+    <span>Low</span><span>High</span>
+  </div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
+<script src="https://unpkg.com/leaflet.heat/dist/leaflet-heat.js"></script>
+
+<script src="app.js"></script>
+</body>
+</html>

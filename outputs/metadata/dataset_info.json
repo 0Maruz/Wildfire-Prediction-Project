@@ -1,0 +1,26 @@
+{
+  "latest_date": "2026-02-03",
+  "earliest_date": "2025-01-31",
+  "total_days": 355,
+  "total_grids": 7426,
+  "features": [
+    "fire_3d",
+    "frp_3d",
+    "frp_max",
+    "fire_days_7d",
+    "fire_yesterday",
+    "frp_trend",
+    "bright_mean",
+    "confidence_mean"
+  ],
+  "model": {
+    "type": "LightGBM",
+    "roc_auc": 0.835,
+    "params": {
+      "n_estimators": 500,
+      "learning_rate": 0.05,
+      "num_leaves": 31,
+      "min_child_samples": 50
+    }
+  }
+}

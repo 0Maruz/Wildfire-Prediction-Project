@@ -1,0 +1,98 @@
+html, body {
+  margin: 0;
+  height: 100%;
+  font-family: system-ui, sans-serif;
+}
+
+#map {
+  position: absolute;
+  left: 280px;
+  right: 0;
+  top: 0;
+  bottom: 0;
+}
+
+#sidebar {
+  position: absolute;
+  width: 260px;
+  height: 100%;
+  background: #111;
+  color: #fff;
+  padding: 15px;
+  overflow-y: auto;
+}
+
+h1 {
+  margin-top: 0;
+}
+
+label {
+  display: block;
+  margin-top: 10px;
+}
+
+.cards {
+  display: flex;
+  gap: 6px;
+  margin: 10px 0;
+}
+
+.card {
+  flex: 1;
+  padding: 6px;
+  text-align: center;
+  border-radius: 4px;
+  font-size: 12px;
+}
+
+.low  { background: #2ecc71; }
+.med  { background: #f39c12; }
+.high { background: #e74c3c; }
+
+.section {
+  margin-top: 12px;
+}
+
+.prediction-info {
+  background: #222;
+  padding: 6px;
+  border-radius: 4px;
+  margin-bottom: 8px;
+}
+
+.legend {
+  position: absolute;
+  right: 20px;
+  background: rgba(0,0,0,0.75);
+  padding: 10px;
+  color: #fff;
+  border-radius: 6px;
+  width: 180px;
+  font-size: 12px;
+}
+
+.legend-title {
+  font-weight: bold;
+  margin-bottom: 4px;
+}
+
+.legend-bar {
+  height: 10px;
+  border-radius: 4px;
+}
+
+.legend-bar.risk {
+  background: linear-gradient(to right, #2ecc71, #f1c40f, #e74c3c);
+}
+
+.legend-bar.uncertainty {
+  background: linear-gradient(to right,
+    rgba(255,255,255,0.2),
+    rgba(255,255,255,1)
+  );
+}
+
+.legend-labels {
+  display: flex;
+  justify-content: space-between;
+}
