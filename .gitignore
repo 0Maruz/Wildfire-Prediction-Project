@@ -5,3 +5,4 @@ __pycache__/
 outputs/models/
 outputs/features/
 outputs/riskmap/*.geojson
+Science-Project/
