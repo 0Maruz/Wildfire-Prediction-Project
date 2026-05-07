@@ -23,9 +23,23 @@ log = logging.getLogger("fetch_firms")
 
 FIRMS_API_KEY = os.getenv("FIRMS_API_KEY")
 TH_BBOX = os.getenv("FIRMS_BBOX", "96,4,107,22")
-DEFAULT_DAYS = int(os.getenv("FIRMS_DAYS", "1"))
-DATA_DIR = os.getenv("DATA_DIR", "./data")
-OUT_FILE = os.getenv("FIRMS_PATH", "./data/firms/firms_all.parquet")
+DEFAULT_DAYS = int(os.getenv("FIRMS_DAYS", "2"))
+
+# Resolve relative env-supplied paths against the project root, not the
+# script's cwd. Without this, running `python fetch_firms.py` from src/ writes
+# to `src/data/firms/` while training reads from the project's `data/firms/`,
+# creating a silent dual-cache split. Same _resolve pattern as train.py.
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def _resolve(base_dir: str, value: Optional[str]) -> Optional[str]:
+    if not value:
+        return value
+    return value if os.path.isabs(value) else os.path.normpath(os.path.join(base_dir, value))
+
+
+DATA_DIR = _resolve(BASE_DIR, os.getenv("DATA_DIR")) or os.path.join(BASE_DIR, "data")
+OUT_FILE = _resolve(BASE_DIR, os.getenv("FIRMS_PATH")) or os.path.join(BASE_DIR, "data", "firms", "firms_all.parquet")
 
 DATASETS = [
     "VIIRS_SNPP_NRT",
