@@ -10,7 +10,9 @@
 // No synthetic / faked / interpolated data anywhere in the UI.
 // ===================================
 
-const map = L.map("map", { center: [13.5, 101], zoom: 6 });
+// Thailand centroid (~15.0°N, 101.0°E) at zoom 6 fits the full country
+// from Mae Sai down to Narathiwat in a typical 16:9 viewport.
+const map = L.map("map", { center: [15.0, 101.0], zoom: 6 });
 
 L.tileLayer(
   "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png",
@@ -223,6 +225,17 @@ const URGENCY_DOT_FRAC = {
 const OBSERVED_DOT_FRAC = 0.30;       // observed-fire dots use a fixed fraction
 const APPROX_METERS_PER_DEGREE = 111320;
 
+// Pixel-size clamps applied across zoom levels. Without these, a CRITICAL dot
+// (radius ~2 km in meters) becomes ~900 px wide at zoom 14 — covering most of
+// the screen — and ~1 px at zoom 6 — invisible. The clamp keeps dots in a
+// reasonable pixel range while still letting the meters-based scaling show
+// through in mid-zoom levels.
+//   • Per-tier scaling: CRITICAL gets the biggest min/max, NONE the smallest,
+//     proportional to URGENCY_DOT_FRAC. The 0.40 reference matches CRITICAL.
+const DOT_CLAMP_MIN_PX_REF = 3;       // CRITICAL min px at extreme zoom-out
+const DOT_CLAMP_MAX_PX_REF = 28;      // CRITICAL max px at extreme zoom-in
+const DOT_CLAMP_FRAC_REF   = 0.40;    // reference fraction (CRITICAL)
+
 function _detectGridSizeDegrees(features) {
   if (!features || features.length < 2) return 0.1;
   const lats = [...new Set(features.map(f => f.geometry.coordinates[1]))]
@@ -250,6 +263,30 @@ function _dotRadiusMeters(fraction, gridMeters) {
   return (gridMeters / 2) * fraction;
 }
 
+// Web Mercator meters-per-pixel at a given latitude and the map's current zoom.
+function _metersPerPixel(lat) {
+  return 156543.03392 * Math.cos(lat * Math.PI / 180) / Math.pow(2, map.getZoom());
+}
+
+function _clampPxForFrac(frac) {
+  const scale = frac / DOT_CLAMP_FRAC_REF;
+  return {
+    min: DOT_CLAMP_MIN_PX_REF * scale,
+    max: DOT_CLAMP_MAX_PX_REF * scale,
+  };
+}
+
+// Convert a meters-radius into a meters-radius that, at the current zoom and
+// latitude, falls inside [minPx, maxPx]. The natural meters-based behaviour
+// is preserved in mid-zoom levels; only the extremes are clamped.
+function _clampedRadiusMeters(lat, baseM, minPx, maxPx) {
+  const mPerPx = _metersPerPixel(lat);
+  let px = baseM / mPerPx;
+  if (px > maxPx) px = maxPx;
+  if (px < minPx) px = minPx;
+  return px * mPerPx;
+}
+
 // ===================================
 // Layers
 // ===================================
@@ -261,16 +298,22 @@ function createObservedLayer(features) {
   // there are many markers (8k+ cells at finer grid sizes).
   const renderer = L.canvas({ padding: 0.5 });
   const gridM = _gridSizeMeters();
-  const radiusM = _dotRadiusMeters(OBSERVED_DOT_FRAC, gridM);
+  const baseM = _dotRadiusMeters(OBSERVED_DOT_FRAC, gridM);
+  const px = _clampPxForFrac(OBSERVED_DOT_FRAC);
 
   features.forEach(f => {
     const [lon, lat] = f.geometry.coordinates;
     const props = f.properties;
+    const radiusM = _clampedRadiusMeters(lat, baseM, px.min, px.max);
     const marker = L.circle([lat, lon], {
       radius: radiusM,
       renderer: renderer,
       fillColor: "#ff5722", color: "#fff", weight: 1, fillOpacity: 0.8,
     });
+    marker._baseRadiusM = baseM;
+    marker._minPx = px.min;
+    marker._maxPx = px.max;
+    marker._anchorLat = lat;
     marker.bindPopup(`
       <div class="popup">
         <b style="color:#ff5722;">🔥 Observed Fire (FIRMS)</b><br>
@@ -300,13 +343,19 @@ function createPredictedLayer(features) {
 
     const color = URGENCY_COLORS[p.urgency_level] || URGENCY_COLORS.NONE;
     const frac  = URGENCY_DOT_FRAC[p.urgency_level] ?? URGENCY_DOT_FRAC.NONE;
-    const radiusM = _dotRadiusMeters(frac, gridM);
+    const baseM = _dotRadiusMeters(frac, gridM);
+    const px = _clampPxForFrac(frac);
+    const radiusM = _clampedRadiusMeters(lat, baseM, px.min, px.max);
 
     const marker = L.circle([lat, lon], {
       radius: radiusM,
       renderer: renderer,
       fillColor: color, color: "#fff", weight: 1, fillOpacity: 0.85,
     });
+    marker._baseRadiusM = baseM;
+    marker._minPx = px.min;
+    marker._maxPx = px.max;
+    marker._anchorLat = lat;
 
     const fireDate   = p.predicted_fire_date;
     const daysUntil  = p.days_until_fire;
@@ -497,8 +546,8 @@ function createHeatmapLayer(features) {
           const x = (px + 0.5) * STRIDE;
           const y = (py + 0.5) * STRIDE;
 
-          let weightSum = 0;
-          let weightedValue = 0;
+          let nearestValue = null;
+          let nearestDistSq = Infinity;
           let blobAlpha = 0;   // tracked separately for soft circular edges
 
           for (let i = 0; i < localPoints.length; i++) {
@@ -508,10 +557,13 @@ function createHeatmapLayer(features) {
             const d2 = dx * dx + dy * dy;
             if (d2 > cutoffSq) continue;
 
-            // IDW weight for color averaging — heavy at center, drops as 1/d²
-            const wIdw = 1 / (d2 + 1);
-            weightSum += wIdw;
-            weightedValue += wIdw * lp.value;
+            // Color comes from the NEAREST cell only — guarantees the surface
+            // around a green marker stays green even when a yellow neighbour
+            // is within the IDW cutoff. (IDW averaging caused tier-mismatches.)
+            if (d2 < nearestDistSq) {
+              nearestDistSq = d2;
+              nearestValue = lp.value;
+            }
 
             // Quadratic falloff for blob alpha — goes to 0 exactly at cutoff
             const f = 1 - Math.sqrt(d2) / cutoff;
@@ -520,13 +572,12 @@ function createHeatmapLayer(features) {
           }
 
           const idx = (py * W + px) * 4;
-          if (weightSum === 0) {
+          if (nearestValue === null) {
             data[idx + 3] = 0;
             continue;
           }
 
-          const avgValue = weightedValue / weightSum;
-          const color = _valueToColor(avgValue, thresholds);
+          const color = _valueToColor(nearestValue, thresholds);
           data[idx]     = color.r;
           data[idx + 1] = color.g;
           data[idx + 2] = color.b;
@@ -620,6 +671,21 @@ function addLayersToMap() {
     if (state.layers[k]) map.addLayer(state.layers[k]);
   }
 }
+
+// Re-apply the [minPx, maxPx] pixel clamp to every dot whenever the user zooms.
+// Heatmap re-renders natively on zoom — only the L.circle layers need this.
+function _reclampAllMarkers() {
+  for (const k of ["observed", "predicted"]) {
+    const layer = state.layers[k];
+    if (!layer || typeof layer.eachLayer !== "function") continue;
+    layer.eachLayer(m => {
+      if (m._baseRadiusM == null || typeof m.setRadius !== "function") return;
+      const r = _clampedRadiusMeters(m._anchorLat, m._baseRadiusM, m._minPx, m._maxPx);
+      m.setRadius(r);
+    });
+  }
+}
+map.on("zoomend", _reclampAllMarkers);
 
 // ===================================
 // Day selector

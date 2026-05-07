@@ -12,7 +12,8 @@
 import json
 import os
 from contextlib import asynccontextmanager
-from datetime import timedelta
+from datetime import datetime, timedelta
+from typing import Optional
 
 import joblib
 import numpy as np
@@ -160,6 +161,57 @@ def root():
             "NASA FIRMS VIIRS NRT (real)",
             "Open-Meteo Archive (real, ECMWF ERA5) - if fetch_weather.py was run",
         ],
+    }
+
+
+@app.get("/health")
+def health(request: Request):
+    """Liveness + readiness check. Returns 200 with structured status fields
+    so a load-balancer / monitor can decide whether to route traffic.
+
+    The API is *ready* only when:
+      - model artifact loaded
+      - dataset_info.json present
+      - feature CSV loaded
+      - GeoJSON exists and was refreshed within the last 7 days
+
+    A non-fresh GeoJSON still returns 200 (the model is technically usable),
+    but `geojson_age_days` flags it for the operator.
+    """
+    state = request.app.state
+    meta = _load_metadata()
+
+    # GeoJSON freshness — operators care more about this than `latest_date`,
+    # since the dashboard reads the GeoJSON directly.
+    geojson_age_days: Optional[float] = None
+    if os.path.exists(GEOJSON_PATH):
+        try:
+            geojson_age_days = round(
+                (datetime.now().timestamp() - os.path.getmtime(GEOJSON_PATH)) / 86400.0,
+                2,
+            )
+        except OSError:
+            geojson_age_days = None
+
+    latest_observed = str(state.df["date"].max()) if hasattr(state, "df") and state.df is not None else None
+    skill_check_passed = (meta.get("model", {}) or {}).get("skill_check_passed")
+
+    return {
+        "status": "ok",
+        "ready": all([
+            getattr(state, "model", None) is not None,
+            getattr(state, "df", None) is not None,
+            os.path.exists(META_PATH),
+            os.path.exists(GEOJSON_PATH),
+        ]),
+        "model_loaded": getattr(state, "model", None) is not None,
+        "metadata_present": os.path.exists(META_PATH),
+        "geojson_present": os.path.exists(GEOJSON_PATH),
+        "geojson_age_days": geojson_age_days,
+        "latest_observed_date": latest_observed,
+        "best_model": meta.get("best_model"),
+        "skill_check_passed": skill_check_passed,
+        "feature_count": len(getattr(state, "features", []) or []),
     }
 
 
