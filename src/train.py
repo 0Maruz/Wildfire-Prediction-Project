@@ -25,6 +25,7 @@ from datetime import datetime, timezone
 from typing import Optional, Tuple
 
 import joblib
+import numpy as np
 import pandas as pd
 from dotenv import load_dotenv
 
@@ -124,8 +125,15 @@ def main(
     val_fraction: float = 0.2,
     test_fraction: float = 0.2,
     grid_size: float = 0.1,
+    # Empirically, min_confidence=30 hurt MAE (-1.8 %) and acc±1 (-2.2 pp)
+    # because VIIRS "low" doesn't mean "false detection" — it just means the
+    # surrounding pixels were ambiguous. Dropping those rows costs ~1.3 % of
+    # training data and the model loses more signal than noise. Stay at 0.
     min_confidence: int = 0,
-    only: Optional[Tuple[str, ...]] = None,
+    # Default skips random_forest: it has consistently lost to xgboost on val
+    # MAE while accounting for ~95% of total tuning time (200+ deep trees fit
+    # sequentially). Pass `--only random_forest,lightgbm,xgboost` to reinstate.
+    only: Optional[Tuple[str, ...]] = ("lightgbm", "xgboost"),
     skip_risk_map: bool = False,
     random_state: int = 42,
 ) -> dict:
@@ -140,6 +148,14 @@ def main(
         log.info("Real ERA5 weather cache detected → %s", weather_path)
     else:
         log.info("No weather cache at %s — training without weather features.", p["weather_path"])
+
+    urban_filter_enabled = os.getenv("URBAN_FILTER_ENABLED", "true").lower() in ("1", "true", "yes")
+    urban_buffer_km = float(os.getenv("URBAN_BUFFER_KM", "0.0"))
+    log.info(
+        "Urban filter: enabled=%s, buffer_km=%.1f (consistent with risk_map.py)",
+        urban_filter_enabled, urban_buffer_km,
+    )
+
     daily = load_and_prepare(
         raw_dir=p["raw_dir"],
         firms_path=p["firms_path"],
@@ -147,7 +163,46 @@ def main(
         min_confidence=min_confidence,
         densify=True,
         weather_path=weather_path,
+        filter_urban=urban_filter_enabled,
+        urban_buffer_km=urban_buffer_km,
     )
+
+    # Stale-data check: warn if FIRMS hasn't been refreshed recently. The
+    # model can still train on old data, but inference on stale state means
+    # the dashboard's predictions are for a window that has already passed.
+    latest_observed = pd.to_datetime(daily["date"]).max()
+    stale_days = (pd.Timestamp.utcnow().normalize().tz_localize(None) - latest_observed).days
+    STALE_WARN_DAYS = int(os.getenv("STALE_WARN_DAYS", "5"))
+    if stale_days > STALE_WARN_DAYS:
+        log.warning(
+            "⚠️  FIRMS DATA STALE: latest observation is %s (%d days behind today). "
+            "Predictions will be for a window starting %d days ago. "
+            "Run `python fetch_firms.py --days 5` (or `./run.sh --fresh`) to refresh.",
+            latest_observed.date(), stale_days, stale_days,
+        )
+
+    # Auto-drop weather features when coverage is too sparse to be useful.
+    # With <20% coverage the lag/roll weather features are mostly NaN→0 fill,
+    # which adds 30 noise columns that drag the model's MAE without contributing
+    # signal. Better to train without weather than to train with broken weather.
+    WEATHER_COLS = ["temp_max", "temp_min", "precip_sum", "wind_max", "et0"]
+    MIN_WEATHER_COVERAGE = float(os.getenv("MIN_WEATHER_COVERAGE", "0.20"))
+    weather_cols_present = [c for c in WEATHER_COLS if c in daily.columns]
+    if weather_cols_present:
+        coverage = daily[weather_cols_present[0]].notna().mean()
+        if coverage < MIN_WEATHER_COVERAGE:
+            log.warning(
+                "Weather coverage %.1f%% < %.0f%% threshold — dropping weather "
+                "columns to avoid feeding noise to the model. Run fetch_weather.py "
+                "to completion (set MIN_WEATHER_COVERAGE in .env to override).",
+                coverage * 100, MIN_WEATHER_COVERAGE * 100,
+            )
+            daily = daily.drop(columns=weather_cols_present)
+        else:
+            log.info(
+                "Weather coverage %.1f%% (≥%.0f%% threshold) — keeping weather features.",
+                coverage * 100, MIN_WEATHER_COVERAGE * 100,
+            )
 
     log.info("==== STEP 2: feature engineering ====")
     feats = build_features(daily, horizon=MAX_PREDICTION_DAYS, grid_size=grid_size)
@@ -214,6 +269,58 @@ def main(
     test_metrics = evaluate(y_test.to_numpy(), test_pred, horizon=MAX_PREDICTION_DAYS)
     log.info("Test metrics (held-out): %s", test_metrics)
 
+    # Honest comparison against a "predict the train mean" baseline. If model
+    # MAE ≈ baseline MAE, the model is essentially predicting the prior — a
+    # 1.52-day MAE looks impressive in isolation but means nothing when a
+    # constant predictor lands at 1.5 days too. This makes that visible.
+    train_mean = float(y_train.mean())
+    baseline_pred = np.full(len(y_test), train_mean)
+    baseline_metrics = evaluate(
+        y_test.to_numpy(), baseline_pred, horizon=MAX_PREDICTION_DAYS,
+    )
+    log.info(
+        "Baseline (predict train mean=%.2f) test metrics: %s", train_mean, baseline_metrics,
+    )
+    mae_improvement = baseline_metrics["mae_days"] - test_metrics["mae_days"]
+    mae_improvement_pct = (
+        100.0 * mae_improvement / baseline_metrics["mae_days"]
+        if baseline_metrics["mae_days"] > 0 else 0.0
+    )
+    log.info(
+        "Model improves MAE by %+.4f days (%+.2f%%) over predict-mean baseline.",
+        mae_improvement, mae_improvement_pct,
+    )
+    if mae_improvement_pct < 5.0:
+        log.warning(
+            "⚠️  MODEL SKILL CHECK FAILED: model only beats baseline by %.2f%% "
+            "(< 5%% threshold). Likely causes: (1) features lack signal, "
+            "(2) target framing too hard, (3) data quality issue. Review "
+            "feature_importance_top + label distribution before deploying.",
+            mae_improvement_pct,
+        )
+
+    # Sanity-check the prediction distribution. A useful regressor produces
+    # outputs with non-trivial spread; if predictions collapse to a narrow
+    # band, the dashboard's tier-coloring will be effectively single-color
+    # and the model is regressing to the mean.
+    pred_stats = {
+        "min": float(np.min(test_pred)),
+        "p25": float(np.percentile(test_pred, 25)),
+        "median": float(np.median(test_pred)),
+        "p75": float(np.percentile(test_pred, 75)),
+        "max": float(np.max(test_pred)),
+        "std": float(np.std(test_pred)),
+    }
+    pred_spread = pred_stats["p75"] - pred_stats["p25"]
+    log.info("Prediction distribution on test: %s", pred_stats)
+    if pred_spread < 0.5:
+        log.warning(
+            "⚠️  PREDICTIONS BUNCHED: IQR = %.2f days (< 0.5 threshold). "
+            "Most cells will fall in the same urgency tier on the dashboard. "
+            "Model is essentially predicting the prior — try richer features.",
+            pred_spread,
+        )
+
     # 6b. Use fixed-domain urgency thresholds.  # FIX: BUG 3 — quantile calibration
     # forced every active cell into a tier (NONE=0); fixed cutoffs make NONE
     # meaningful again and align the pipeline with operator-facing semantics.
@@ -237,6 +344,16 @@ def main(
     joblib.dump(best_model, model_path)
     log.info("Saved model → %s", model_path)
 
+    # Versioned snapshot for rollback / A/B testing. Filename includes the
+    # UTC timestamp + best model name so it's obvious which artefact is
+    # which without opening dataset_info.json.
+    history_dir = os.path.join(p["model_dir"], "history")
+    os.makedirs(history_dir, exist_ok=True)
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    history_path = os.path.join(history_dir, f"{timestamp}_{best_name}.pkl")
+    joblib.dump(best_model, history_path)
+    log.info("Versioned snapshot → %s", history_path)
+
     feature_importance = []
     if hasattr(best_model, "feature_importances_"):
         importances = list(zip(feature_cols, [float(x) for x in best_model.feature_importances_]))
@@ -248,11 +365,15 @@ def main(
         "data_source": "NASA FIRMS VIIRS NRT (real)",
         "earliest_date": str(feats["date"].min()),
         "latest_date": str(feats["date"].max()),
+        "data_stale_days": int(stale_days),
+        "data_is_stale": bool(stale_days > STALE_WARN_DAYS),
         "total_days": int(pd.Series(feats["date"]).nunique()),
         "total_active_cells": int(feats[["lat_grid", "lon_grid"]].drop_duplicates().shape[0]),
         "training_rows": int(len(train_pool)),
         "grid_size": grid_size,
         "min_confidence": min_confidence,
+        "urban_filter_enabled": urban_filter_enabled,
+        "urban_buffer_km": urban_buffer_km,
         "prediction_type": "fire_date",
         "max_prediction_days": MAX_PREDICTION_DAYS,
         "features": feature_cols,
@@ -274,6 +395,12 @@ def main(
             "type": best_name,
             "val_metrics": selection["all_results"][best_name]["metrics"],
             "test_metrics": test_metrics,
+            "baseline_test_metrics": baseline_metrics,
+            "baseline_label_mean": train_mean,
+            "mae_improvement_over_baseline_pct": mae_improvement_pct,
+            "skill_check_passed": mae_improvement_pct >= 5.0,
+            "prediction_distribution_test": pred_stats,
+            "predictions_bunched": pred_spread < 0.5,
             "best_params": selection["all_results"][best_name]["best_params"],
             # FIX: BUG 4 — persist split date ranges so downstream consumers can
             # interpret val/test metric gaps in light of seasonal coverage.
@@ -316,12 +443,20 @@ def _cli() -> argparse.Namespace:
     p.add_argument("--val-fraction", type=float, default=0.2)
     p.add_argument("--test-fraction", type=float, default=0.2)
     p.add_argument("--grid-size", type=float, default=float(os.getenv("GRID_SIZE", "0.1")))
-    p.add_argument("--min-confidence", type=int, default=0)
+    p.add_argument("--min-confidence", type=int, default=0,
+                   help="VIIRS confidence floor. 0 (default) keeps everything; "
+                        "30 drops 'low' but empirically hurts MAE — only useful "
+                        "if you suspect specific false-positive sources.")
     p.add_argument(
         "--only",
         type=str,
-        default=None,
-        help="Comma-separated subset, e.g. 'lightgbm,xgboost'",
+        default="lightgbm,xgboost",
+        help="Comma-separated subset (default: lightgbm,xgboost — random_forest "
+             "is excluded because it loses on val MAE while taking ~95%% of tuning time)",
+    )
+    p.add_argument(
+        "--quick", action="store_true",
+        help="Fast iteration: --n-iter 10 --n-splits 3 --only lightgbm (~3-5 min)",
     )
     p.add_argument("--skip-risk-map", action="store_true")
     return p.parse_args()
@@ -329,6 +464,11 @@ def _cli() -> argparse.Namespace:
 
 if __name__ == "__main__":
     args = _cli()
+    if args.quick:
+        args.n_iter = 10
+        args.n_splits = 3
+        args.only = "lightgbm"
+        log.info("Quick mode: n_iter=10, n_splits=3, only=lightgbm")
     only = tuple(s.strip() for s in args.only.split(",")) if args.only else None
     main(
         n_iter=args.n_iter,
