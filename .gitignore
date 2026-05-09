@@ -39,6 +39,12 @@ outputs/**
 !outputs/metadata/
 !outputs/riskmap/
 !outputs/**/.gitkeep
+# Frontend pulls these two artifacts directly via relative paths, so we
+# check them in to make GitHub Pages a no-op deploy. dataset_info.json is
+# tiny; the GeoJSON grows over time but stays under a few MB after the
+# 7-day-window pruning risk_map.append_geojson does on each run.
+!outputs/riskmap/fire_dates_all.geojson
+!outputs/metadata/dataset_info.json
 
 # Misc
 src.zip

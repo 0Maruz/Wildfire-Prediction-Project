@@ -1,0 +1,260 @@
+{
+  "trained_at": "2026-05-09T14:09:26.925473+00:00",
+  "data_source": "NASA FIRMS VIIRS NRT (real)",
+  "earliest_date": "2025-01-31",
+  "latest_date": "2026-05-09",
+  "data_stale_days": 0,
+  "data_is_stale": false,
+  "total_days": 464,
+  "total_active_cells": 9380,
+  "training_rows": 402128,
+  "grid_size": 0.1,
+  "min_confidence": 0,
+  "urban_filter_enabled": true,
+  "urban_buffer_km": 0.0,
+  "prediction_type": "fire_date",
+  "max_prediction_days": 7,
+  "features": [
+    "fire_lag_1",
+    "fire_lag_2",
+    "fire_lag_3",
+    "fire_lag_7",
+    "fire_lag_14",
+    "fire_lag_30",
+    "frp_lag_1",
+    "frp_lag_2",
+    "frp_lag_3",
+    "frp_lag_7",
+    "frp_lag_14",
+    "frp_lag_30",
+    "fire_sum_3d",
+    "frp_sum_3d",
+    "frp_max_3d",
+    "active_days_3d",
+    "fire_sum_7d",
+    "frp_sum_7d",
+    "frp_max_7d",
+    "active_days_7d",
+    "fire_sum_14d",
+    "frp_sum_14d",
+    "frp_max_14d",
+    "active_days_14d",
+    "fire_sum_30d",
+    "frp_sum_30d",
+    "frp_max_30d",
+    "active_days_30d",
+    "frp_trend_1d",
+    "frp_trend_3d",
+    "fire_count_today",
+    "frp_sum_today",
+    "bright_mean_today",
+    "confidence_mean_today",
+    "night_fire_count",
+    "afternoon_fire_count",
+    "n_satellites_today",
+    "neighbor_fire_today",
+    "neighbor_frp_today",
+    "neighbor_fire_lag_1",
+    "neighbor_fire_lag_3",
+    "neighbor_fire_lag_7",
+    "neighbor_frp_lag_1",
+    "neighbor_frp_lag_3",
+    "neighbor_frp_lag_7",
+    "neighbor_fire_sum_3d",
+    "neighbor_frp_sum_3d",
+    "neighbor_fire_sum_7d",
+    "neighbor_frp_sum_7d",
+    "neighbor_fire_velocity_3d",
+    "neighbor_frp_velocity_3d",
+    "wide_neighbor_fire_today",
+    "wide_neighbor_fire_lag_1",
+    "wide_neighbor_fire_lag_3",
+    "wide_neighbor_fire_lag_7",
+    "wide_neighbor_fire_sum_3d",
+    "wide_neighbor_fire_sum_7d",
+    "month_sin",
+    "month_cos",
+    "doy_sin",
+    "doy_cos",
+    "is_burn_season",
+    "days_from_burn_peak",
+    "distance_to_nearest_city_km",
+    "fire_days_per_year_so_far",
+    "days_since_last_fire",
+    "tree_cover_pct_2000",
+    "tree_loss_pct_recent",
+    "lat_grid",
+    "lon_grid"
+  ],
+  "weather_features_used": [],
+  "urgency_thresholds": {
+    "CRITICAL": 0.0,
+    "HIGH": 2.0,
+    "MEDIUM": 4.0,
+    "LOW": 7.0
+  },
+  "urgency_thresholds_note": "Fixed domain thresholds: CRITICAL=fire today, HIGH\u22642d, MEDIUM\u22644d, LOW\u22647d, NONE>7d. Quantile calibration was removed because it forced every active cell into a tier and made NONE structurally impossible.",
+  "best_model": "lightgbm",
+  "model": {
+    "type": "lightgbm",
+    "val_metrics": {
+      "mae_days": 1.9722,
+      "rmse_days": 2.3219,
+      "r2": -0.3191,
+      "accuracy_within_1day": 0.4001,
+      "cv_mae_days": 1.5235
+    },
+    "test_metrics": {
+      "mae_days": 1.4649,
+      "rmse_days": 1.714,
+      "r2": 0.2775,
+      "accuracy_within_1day": 0.5163
+    },
+    "baseline_test_metrics": {
+      "mae_days": 1.7405,
+      "rmse_days": 2.0789,
+      "r2": -0.0629,
+      "accuracy_within_1day": 0.4458
+    },
+    "baseline_label_mean": 3.0773305260365724,
+    "mae_improvement_over_baseline_pct": 15.834530307382927,
+    "skill_check_passed": true,
+    "prediction_distribution_test": {
+      "min": 0.9414614437727372,
+      "p25": 3.5863618186805026,
+      "median": 3.9894051879482855,
+      "p75": 4.263287329111049,
+      "max": 5.026846089791426,
+      "std": 0.6992018909365972
+    },
+    "predictions_bunched": false,
+    "best_params": {
+      "subsample": 0.8,
+      "reg_lambda": 1.0,
+      "reg_alpha": 1.0,
+      "num_leaves": 31,
+      "n_estimators": 600,
+      "min_child_samples": 100,
+      "learning_rate": 0.02,
+      "colsample_bytree": 0.8
+    },
+    "split_date_ranges": {
+      "train": [
+        "2025-01-31",
+        "2025-12-10"
+      ],
+      "val": [
+        "2025-12-10",
+        "2026-01-26"
+      ],
+      "test": [
+        "2026-01-26",
+        "2026-05-08"
+      ]
+    },
+    "note": "val_metrics: model selection on 20% val split. test_metrics: held-out 20% test split, evaluated before refit. Deployed artefact is refit on train+val."
+  },
+  "all_candidates": {
+    "lightgbm": {
+      "best_params": {
+        "subsample": 0.8,
+        "reg_lambda": 1.0,
+        "reg_alpha": 1.0,
+        "num_leaves": 31,
+        "n_estimators": 600,
+        "min_child_samples": 100,
+        "learning_rate": 0.02,
+        "colsample_bytree": 0.8
+      },
+      "metrics": {
+        "mae_days": 1.9722,
+        "rmse_days": 2.3219,
+        "r2": -0.3191,
+        "accuracy_within_1day": 0.4001,
+        "cv_mae_days": 1.5235
+      }
+    }
+  },
+  "feature_importance_top": [
+    {
+      "feature": "doy_sin",
+      "importance": 3461.0
+    },
+    {
+      "feature": "doy_cos",
+      "importance": 3097.0
+    },
+    {
+      "feature": "lat_grid",
+      "importance": 1427.0
+    },
+    {
+      "feature": "lon_grid",
+      "importance": 1320.0
+    },
+    {
+      "feature": "days_from_burn_peak",
+      "importance": 1092.0
+    },
+    {
+      "feature": "days_since_last_fire",
+      "importance": 699.0
+    },
+    {
+      "feature": "tree_cover_pct_2000",
+      "importance": 641.0
+    },
+    {
+      "feature": "distance_to_nearest_city_km",
+      "importance": 410.0
+    },
+    {
+      "feature": "tree_loss_pct_recent",
+      "importance": 314.0
+    },
+    {
+      "feature": "fire_days_per_year_so_far",
+      "importance": 308.0
+    },
+    {
+      "feature": "wide_neighbor_fire_sum_7d",
+      "importance": 297.0
+    },
+    {
+      "feature": "wide_neighbor_fire_today",
+      "importance": 249.0
+    },
+    {
+      "feature": "month_sin",
+      "importance": 232.0
+    },
+    {
+      "feature": "frp_sum_30d",
+      "importance": 205.0
+    },
+    {
+      "feature": "wide_neighbor_fire_sum_3d",
+      "importance": 198.0
+    },
+    {
+      "feature": "neighbor_frp_sum_3d",
+      "importance": 191.0
+    },
+    {
+      "feature": "neighbor_fire_today",
+      "importance": 189.0
+    },
+    {
+      "feature": "neighbor_fire_sum_3d",
+      "importance": 175.0
+    },
+    {
+      "feature": "wide_neighbor_fire_lag_7",
+      "importance": 173.0
+    },
+    {
+      "feature": "neighbor_frp_sum_7d",
+      "importance": 172.0
+    }
+  ]
+}
