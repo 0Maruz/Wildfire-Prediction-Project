@@ -120,12 +120,12 @@ After aggregation, `data_loader.densify_active_cells()` expands the sparse fire-
 
 `features.py` exposes two tuples and a resolver:
 
-- `FEATURES_CORE` (~62 columns) — always present:
+- `FEATURES_CORE` (~70 columns) — always present:
   - Lags at 1/2/3/7/14/30 days, rolls at 3/7/14/30 days, active-day counts, FRP trend.
   - Current-day signals (`fire_count_today`, `frp_sum_today`, `bright_mean_today`, `confidence_mean_today`).
   - **Time-of-day + multi-satellite** (Thai-local hours): `night_fire_count` (22:00-05:59 = larger fires that survived dusk), `afternoon_fire_count` (12:00-17:59 = peak agri-burn window), `n_satellites_today` (count of distinct VIIRS satellites that detected this cell — confidence signal).
   - Cyclic month/DOY, burn-season flag, `days_from_burn_peak` (distance from DOY 75, Thailand's peak burn day).
-  - **3×3 spatial-neighbour** fire/FRP aggregates with their own lags & rolls.
+  - **Two-ring spatial neighbours** (see Spatial neighbours section): inner 3×3 (`neighbor_fire_today`, lags, rolls) + outer 5×5-ring (`wide_neighbor_fire_today`, lags, rolls) + spread velocity (`neighbor_fire_velocity_3d` = today − lag_3, `neighbor_frp_velocity_3d`).
   - **Tier-1 cell features**: `distance_to_nearest_city_km` (static, from `urban_areas.classify_urban`), `fire_days_per_year_so_far` (expanding window, no leakage — uses only data before each row's date), `days_since_last_fire` (causal dry-streak counter, resets on each fire-day).
   - **Vegetation features** (when `data/static/tree_cover_per_cell.parquet` exists from `fetch_treecover.py`): `tree_cover_pct_2000` (Hansen GFC baseline canopy density), `tree_loss_pct_recent` (% pixels in cell that lost forest 2018-2023). Distinguishes "what's there to burn" — dense forest cells behave very differently from grassland given identical fire history.
   - `lat_grid`, `lon_grid` — coarse spatial encoding.
@@ -134,11 +134,17 @@ After aggregation, `data_loader.densify_active_cells()` expands the sparse fire-
 
 `api.py` and `risk_map.py` resolve the feature list at runtime by reading `outputs/metadata/dataset_info.json["features"]` first (matches the deployed model exactly), and fall back to `resolve_features(df)`. **Don't re-introduce hardcoded feature lists in those files.**
 
-### Spatial neighbours (real FIRMS, not synthetic)
+### Spatial neighbours — two concentric rings (real FIRMS, not synthetic)
 
-`features.add_neighbor_features()` sums `fire_count` and `frp_sum` across the 8 cells surrounding each `(lat_grid, lon_grid)` for the same date. Implementation shifts the source frame's coords by negative offsets so each row's `(lat_grid, lon_grid)` becomes the *target* cell whose neighbour it is, then merges. Pure aggregation — no smoothing, no interpolation, zero when a neighbour cell has no detection.
+`features.add_neighbor_features()` produces two independent neighbourhood aggregates per cell-day:
+- **Inner ring** (`neighbor_fire_today`, `neighbor_frp_today`) — sum across the 8 cells in the 3×3 box minus centre. Captures "fire right next door".
+- **Outer ring** (`wide_neighbor_fire_today`, `wide_neighbor_frp_today`) — sum across the 16 cells in the 5×5 box minus the inner 3×3. Captures regional fire pressure 2 cells out (~22 km at 0.1° grid). Kept separate from the inner ring so the model can weight them differently — lumping them would smear a strong adjacent signal across a much larger area.
 
-Spatial features must be computed *before* `add_temporal_features()` so the lags/rolls of `neighbor_fire_today` / `neighbor_frp_today` exist downstream.
+Implementation shifts the source frame's coords by negative offsets so each row's `(lat_grid, lon_grid)` becomes the *target* cell whose neighbour it is, then merges. Pure aggregation — no smoothing, no interpolation, zero when a neighbour cell has no detection.
+
+`add_temporal_features()` then computes lags 1/3/7 + rolls 3/7d on the inner ring (plus FRP variants), lags + rolls on the outer ring (fire only), and **spread-velocity** features: `neighbor_fire_velocity_3d = neighbor_fire_today − neighbor_fire_lag_3` and the FRP equivalent. Velocity captures whether a fire is sweeping toward this cell vs sitting at constant level — a cell whose neighbours just lit up faces different risk than one that's been smouldering for a week.
+
+Spatial features must be computed *before* `add_temporal_features()` so the lags/rolls/velocities can derive from the per-day neighbour aggregates.
 
 ### Urgency thresholds — fixed-domain with degenerate-case fallback
 
@@ -204,9 +210,19 @@ The training-time filter typically removes only 0.1 % of hotspots (~370 of 437k 
 
 Both `api.py` (`_rounding_confidence`) and `risk_map.py` (`prediction_confidence`) compute `1 - |raw_pred - rounded_pred|`. This is **not** a calibrated likelihood — it only reflects how close the regressor's continuous output landed to a whole number. Don't treat it as a probability in downstream UI or aggregations, and don't add fake calibration without changing the underlying model. The frontend tooltip labels it "rounding proxy" for this reason.
 
-### Frontend day selector
+### Frontend sidebar controls
 
-`frontend/app.js` exposes a Day 1–7 selector that filters predicted markers by the model's clipped `days_until_fire` integer — pure filtering of real outputs, no smoothing or interpolation. Clicking a row in the timeline also triggers the same filter. The validation-metrics panel reads `metadata.metrics` written into the GeoJSON by `risk_map.append_geojson` (sourced from `dataset_info.json["model"]["test_metrics"]`).
+Beyond the `Day 0–7` selector that filters predicted markers by the model's `days_until_fire` integer (pure filter on real outputs, clicking a timeline row mirrors it), the sidebar offers four GISTDA-style filters / data tools, all driven by the same in-memory GeoJSON:
+
+- **Base-date picker** — the GeoJSON accumulates predictions for every base_date `risk_map.py` has run on (older entries are preserved by `append_geojson`). The "View predictions from" `<select>` is populated from `state.geojson.metadata` at load time; "Latest" follows the freshest snapshot, individual dates pin to that snapshot. Lets the operator compare yesterday's call vs today's without retraining.
+- **Province filter** — populated dynamically from each snapshot's `properties.province` values (computed at risk_map time via `thailand_boundary.find_province`, so the dashboard never does point-in-polygon client-side). Dropdown shows only provinces that have at least one cell in the current snapshot.
+- **Day-button auto-hide** — `updateTimeline()` hides `.day-btn` elements whose count is 0 in the current snapshot (and the equivalent timeline row) so the selector reflects the model's actual predictive range, not the static 0..7 horizon. If the previously-selected day went empty on a refresh, the selection falls back to "All".
+- **Land-cover breakdown card** — three-bucket counts (Forest ≥50% / Mixed 10–50% / Open <10%) computed client-side from each cell's `tree_cover_pct_2000`. Helps the operator distinguish "agricultural-burn signal" (mostly Open) from "wildfire risk" (Forest) at a glance.
+- **CSV export button** — emits exactly the cells currently visible (base-date + province + day-selector all applied) as a flat 14-column CSV. Filename encodes the active filter state (`fire_predictions_{base}_{province}_{day}.csv`).
+
+The `renderThresholds()` helper detects when `risk_map.py` fell back to snapshot-quantile tiers (CRITICAL > 0 in the saved thresholds) and replaces the threshold-note copy with a "Quantile mode: tiers are 25/50/75 percentile ranks of this snapshot — relative ordering, not absolute risk" explanation, so an operator seeing 40 / 40 / 39 / 40 across the urgency cards understands those aren't the absolute fire-today/2d/4d cutoffs.
+
+The validation-metrics panel reads `metadata.metrics` written into the GeoJSON by `risk_map.append_geojson` (sourced from `dataset_info.json["model"]["test_metrics"]`).
 
 ### Frontend marker rendering — meters with pixel clamps
 
@@ -243,9 +259,10 @@ All entry points resolve paths via `BASE_DIR = os.path.dirname(os.path.dirname(o
 | `COUNTRY_FILTER_ENABLED` | `true` | Drop predicted cells outside Thailand's land border at risk_map time. |
 | `STALE_WARN_DAYS` | `5` | Warn (and persist `data_is_stale=true`) when latest FIRMS observation is older than this. |
 | `MIN_WEATHER_COVERAGE` | `0.20` | Below this share of non-NaN weather rows, training auto-drops weather columns. |
-| `MIN_HISTORICAL_FIRES_FOR_DISPLAY` | `1` | risk_map.py filter: minimum fires in last 30d. |
+| `MIN_HISTORICAL_FIRES_FOR_DISPLAY` | `3` | risk_map.py filter: minimum fires in last 30d. |
 | `MIN_LONG_HISTORICAL_FIRES` | `3` | risk_map.py filter: minimum fires in last 90d. |
-| `MIN_FIRE_DAYS_PER_YEAR` | `1.0` | risk_map.py filter: annualized fire-day rate floor. |
+| `MAX_CELLS_PER_DAY` | `100` | risk_map.py per-day cap (top-N by recent activity). Set 0 to disable. |
+| `MIN_FIRE_DAYS_PER_YEAR` | `3.0` | risk_map.py filter: annualized fire-day rate floor. |
 
 ### Gotchas
 
