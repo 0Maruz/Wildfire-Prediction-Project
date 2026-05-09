@@ -631,13 +631,40 @@ function updateTimeline(predicted, baseDate) {
     if (d >= 0 && d <= 7) dayCounts[d]++;
   });
 
+  // Day buttons that map to empty days are hidden so the selector reflects
+  // the model's actual predictive range. The "All" button is always shown.
+  // If the currently-selected day went empty (e.g. user filtered by +4 then
+  // a refresh produced 0 cells there), fall back to "All".
+  let activeWentEmpty = false;
+  document.querySelectorAll(".day-btn").forEach(btn => {
+    const day = btn.dataset.day;
+    if (day === "all") return;
+    const count = dayCounts[Number(day)] || 0;
+    if (count === 0) {
+      btn.style.display = "none";
+      if (state.selectedDay === day) activeWentEmpty = true;
+    } else {
+      btn.style.display = "";
+    }
+  });
+  if (activeWentEmpty) {
+    state.selectedDay = "all";
+    document.querySelectorAll(".day-btn").forEach(b => {
+      b.classList.toggle("active", b.dataset.day === "all");
+    });
+  }
+
+  // Timeline rows: skip days with no predictions so the panel doesn't
+  // display a stack of "0 fires" placeholders for the prediction-horizon
+  // tail the model can't reach.
   for (let i = 0; i <= 7; i++) {
-    const dateStr = dateAdd(baseDate, i);
     const count = dayCounts[i];
+    if (count === 0) continue;
+    const dateStr = dateAdd(baseDate, i);
     const label = i === 0 ? "Today" : i === 1 ? "Tomorrow" : `+${i} days`;
 
     const item = document.createElement("div");
-    item.className = "timeline-item" + (count > 0 ? " has-fires" : "");
+    item.className = "timeline-item has-fires";
     item.innerHTML = `
       <div class="timeline-day">${label}</div>
       <div class="timeline-date">${dateStr}</div>
@@ -645,6 +672,20 @@ function updateTimeline(predicted, baseDate) {
     `;
     item.style.cursor = "pointer";
     item.addEventListener("click", () => selectDay(String(i)));
+    timeline.appendChild(item);
+  }
+
+  // If no day has any predictions, show a single explanatory row instead of
+  // an empty panel — operators noticing this should know the model's view
+  // is "no imminent fire risk" rather than "the dashboard is broken."
+  if (timeline.childElementCount === 0) {
+    const item = document.createElement("div");
+    item.className = "timeline-item";
+    item.innerHTML = `
+      <div class="timeline-day" style="opacity:0.6;">No predictions</div>
+      <div class="timeline-date">over the next 7 days</div>
+      <div class="timeline-count" style="opacity:0.6;">—</div>
+    `;
     timeline.appendChild(item);
   }
 }
