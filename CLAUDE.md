@@ -65,6 +65,7 @@ There is no test suite, linter, or build step.
 |---|---|
 | `fetch_firms.py` | Fetches VIIRS NRT hotspots from NASA FIRMS with retry/backoff; writes accumulative `data/firms/firms_all.parquet`. |
 | `fetch_weather.py` | **Optional.** Fetches real ECMWF ERA5 daily aggregates from Open-Meteo Archive (no key) for every active FIRMS cell, caches to `data/weather/weather_cache.parquet`. Idempotent — only fetches missing (cell, date) tuples. |
+| `fetch_treecover.py` | **Optional, run-once.** Streams Hansen Global Forest Change v1.11 `treecover2000` + `lossyear` rasters via HTTP range reads, aggregates 30 m source pixels into the project's 0.1° grid, writes per-cell `tree_cover_pct_2000` + `tree_loss_pct_recent` to `data/static/tree_cover_per_cell.parquet`. Adds vegetation context that the model otherwise lacks. |
 | `io_utils.py` | Format-agnostic table I/O. `read_table` / `write_table` / `resolve_existing` dispatch on file extension (`.csv` ↔ `.parquet`); `list_tables` resolves dirs/globs and prefers Parquet when both extensions exist for the same basename. **Use these helpers** instead of `pd.read_csv` / `pd.to_csv` so files stay swappable. |
 | `data_loader.py` | Pure I/O: loads raw + FIRMS hotspot tables (CSV or Parquet via `io_utils`), cleans, snaps to grid, aggregates to daily cell-day, **densifies active cells** over the date range, drops hotspots inside curated urban areas (`filter_urban_hotspots`), and (if `weather_path` is supplied) left-joins the weather cache. |
 | `urban_areas.py` | Curated list of ~40 Thai urban centres with hand-tuned exclusion radii. `classify_urban(lats, lons, buffer_km)` returns `(is_urban, nearest_dist_km, nearest_name)` for any batch of cells. Used at training time (drop urban hotspots) and at inference time (drop urban predictions, annotate "nearest city"). |
@@ -123,6 +124,7 @@ After aggregation, `data_loader.densify_active_cells()` expands the sparse fire-
   - Cyclic month/DOY, burn-season flag, `days_from_burn_peak` (distance from DOY 75, Thailand's peak burn day).
   - **3×3 spatial-neighbour** fire/FRP aggregates with their own lags & rolls.
   - **Tier-1 cell features** (added 2026-05): `distance_to_nearest_city_km` (static, from `urban_areas.classify_urban`), `fire_days_per_year_so_far` (expanding window, no leakage — uses only data before each row's date), `days_since_last_fire` (causal dry-streak counter, resets on each fire-day).
+  - **Vegetation features** (when `data/static/tree_cover_per_cell.parquet` exists from `fetch_treecover.py`): `tree_cover_pct_2000` (Hansen GFC baseline canopy density), `tree_loss_pct_recent` (% pixels in cell that lost forest 2018-2023). Distinguishes "what's there to burn" — dense forest cells behave very differently from grassland given identical fire history.
   - `lat_grid`, `lon_grid` — coarse spatial encoding.
 - `FEATURES_WEATHER` (~30 columns) — only emitted when ERA5 weather columns are present in the daily frame. Per-variable today + lags 1/3/7 + rolls 3/7 over `temp_max` / `temp_min` / `precip_sum` / `wind_max` / `et0`. Auto-dropped at training time when coverage falls below `MIN_WEATHER_COVERAGE` (default 20 %, configurable via env) — a sparse weather cache is more harmful than absent weather, since lag/roll features collapse to NaN→0 noise.
 - `resolve_features(df)` — returns the actually-present subset given a feature dataframe. **Use this** (or `dataset_info.json["features"]` after training) instead of hardcoding a list.
@@ -210,6 +212,8 @@ All entry points resolve paths via `BASE_DIR = os.path.dirname(os.path.dirname(o
 | `GRID_SIZE` | `0.1` | Lat/lon snap resolution in degrees. |
 | `URBAN_FILTER_ENABLED` | `true` | Drop urban hotspots at training and inference. |
 | `URBAN_BUFFER_KM` | `0` | Extra km beyond each city's hand-tuned radius. |
+| `COUNTRY_FILTER_ENABLED` | `true` | Drop predicted cells outside Thailand's land border at risk_map time. |
+| `STALE_WARN_DAYS` | `5` | Warn (and persist `data_is_stale=true`) when latest FIRMS observation is older than this. |
 | `MIN_WEATHER_COVERAGE` | `0.20` | Below this share of non-NaN weather rows, training auto-drops weather columns. |
 | `MIN_HISTORICAL_FIRES_FOR_DISPLAY` | `1` | risk_map.py filter: minimum fires in last 30d. |
 | `MIN_LONG_HISTORICAL_FIRES` | `3` | risk_map.py filter: minimum fires in last 90d. |

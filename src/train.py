@@ -61,6 +61,7 @@ def _paths() -> dict:
         "raw_dir": _resolve(base_dir, os.getenv("RAW_DIR")) or os.path.join(base_dir, "data", "raw"),
         "firms_path": _resolve(base_dir, os.getenv("FIRMS_PATH")) or os.path.join(base_dir, "data", "firms", "firms_all.parquet"),
         "weather_path": os.path.join(weather_dir, "weather_cache.parquet"),
+        "tree_cover_path": os.path.join(base_dir, "data", "static", "tree_cover_per_cell.parquet"),
         "output_dir": output_dir,
         "model_dir": os.path.join(output_dir, "models"),
         "feature_dir": os.path.join(output_dir, "features"),
@@ -156,6 +157,16 @@ def main(
         urban_filter_enabled, urban_buffer_km,
     )
 
+    tree_cover_path = p["tree_cover_path"] if os.path.exists(p["tree_cover_path"]) else None
+    if tree_cover_path:
+        log.info("Hansen tree cover cache detected → %s", tree_cover_path)
+    else:
+        log.info(
+            "No tree cover cache at %s — training without vegetation features. "
+            "Run `python fetch_treecover.py` to populate.",
+            p["tree_cover_path"],
+        )
+
     daily = load_and_prepare(
         raw_dir=p["raw_dir"],
         firms_path=p["firms_path"],
@@ -163,6 +174,7 @@ def main(
         min_confidence=min_confidence,
         densify=True,
         weather_path=weather_path,
+        tree_cover_path=tree_cover_path,
         filter_urban=urban_filter_enabled,
         urban_buffer_km=urban_buffer_km,
     )

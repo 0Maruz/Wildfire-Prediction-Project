@@ -294,6 +294,50 @@ def densify_active_cells(daily: pd.DataFrame) -> pd.DataFrame:
     return out.sort_values(["lat_grid", "lon_grid", "date"]).reset_index(drop=True)
 
 
+def merge_tree_cover(daily: pd.DataFrame, tree_cover_path: Optional[str]) -> pd.DataFrame:
+    """Left-join Hansen GFC tree cover features (per-cell, static).
+
+    Cache columns: lat_grid, lon_grid, tree_cover_pct_2000, tree_loss_pct_recent.
+    No-op if cache missing — features.py will simply not see the columns
+    and resolve_features will skip them.
+    """
+    if not tree_cover_path or not os.path.exists(tree_cover_path):
+        return daily
+
+    try:
+        tc = read_table(tree_cover_path)
+    except Exception as exc:
+        log.warning("Could not read tree_cover cache (%s): %s — skipping merge.",
+                    tree_cover_path, exc)
+        return daily
+
+    expected = {"lat_grid", "lon_grid", "tree_cover_pct_2000", "tree_loss_pct_recent"}
+    missing = expected - set(tc.columns)
+    if missing:
+        log.warning("tree_cover cache missing columns %s — skipping merge.", sorted(missing))
+        return daily
+
+    tc = tc.copy()
+    tc["lat_grid"] = tc["lat_grid"].round(6)
+    tc["lon_grid"] = tc["lon_grid"].round(6)
+
+    daily = daily.copy()
+    daily["lat_grid"] = daily["lat_grid"].round(6)
+    daily["lon_grid"] = daily["lon_grid"].round(6)
+
+    merged = daily.merge(
+        tc[["lat_grid", "lon_grid", "tree_cover_pct_2000", "tree_loss_pct_recent"]],
+        on=["lat_grid", "lon_grid"],
+        how="left",
+    )
+    n_with_cover = merged["tree_cover_pct_2000"].notna().sum()
+    log.info(
+        "Merged Hansen tree cover: %d / %d rows have tree_cover values",
+        int(n_with_cover), len(merged),
+    )
+    return merged
+
+
 def merge_weather(daily: pd.DataFrame, weather_path: Optional[str]) -> pd.DataFrame:
     """Left-join real ERA5 weather (from fetch_weather.py cache) onto the daily frame.
 
@@ -351,6 +395,7 @@ def load_and_prepare(
     min_confidence: int = 0,
     densify: bool = True,
     weather_path: Optional[str] = None,
+    tree_cover_path: Optional[str] = None,
     filter_urban: bool = True,
     urban_buffer_km: float = 0.0,
 ) -> pd.DataFrame:
@@ -388,5 +433,6 @@ def load_and_prepare(
     if densify:
         daily = densify_active_cells(daily)
 
+    daily = merge_tree_cover(daily, tree_cover_path)
     daily = merge_weather(daily, weather_path)
     return daily

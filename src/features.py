@@ -230,6 +230,13 @@ def add_temporal_features(df: pd.DataFrame) -> pd.DataFrame:
         df["afternoon_fire_count"] = df["afternoon_fire_count"].fillna(0)
     if "n_satellites_today" in df.columns:
         df["n_satellites_today"] = df["n_satellites_today"].fillna(0)
+    # Hansen tree cover features (static per cell, present when cache is
+    # populated). Cells outside Thailand BBOX may not have coverage —
+    # NaN → 0 means "treat as bare ground" which is a sensible prior.
+    if "tree_cover_pct_2000" in df.columns:
+        df["tree_cover_pct_2000"] = df["tree_cover_pct_2000"].fillna(0)
+    if "tree_loss_pct_recent" in df.columns:
+        df["tree_loss_pct_recent"] = df["tree_loss_pct_recent"].fillna(0)
 
     # ── neighbour lags / rolls (spatial signal from REAL adjacent-cell fires) ──
     if "neighbor_fire_today" in df.columns:
@@ -458,6 +465,15 @@ def _build_core_feature_list() -> List[str]:
         "distance_to_nearest_city_km",  # static, spatial
         "fire_days_per_year_so_far",    # expanding-window, no leakage
         "days_since_last_fire",         # causal dry-streak
+    ]
+    # Hansen GFC vegetation context — only emitted when the tree-cover
+    # cache exists (resolve_features filters by actual presence). Tells
+    # the model "what's there to burn": dense forest cells (high cover)
+    # behave very differently from grassland (low cover) given the same
+    # fire history.
+    cols += [
+        "tree_cover_pct_2000",     # static, % canopy cover at baseline
+        "tree_loss_pct_recent",    # static, % pixels lost forest 2018-2023
     ]
     cols += ["lat_grid", "lon_grid"]
     return cols
