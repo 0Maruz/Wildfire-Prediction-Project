@@ -514,6 +514,12 @@ def append_geojson(observed: pd.DataFrame, predicted: pd.DataFrame, base_date, t
                 "nearest_urban_area": str(r["nearest_urban_area"]),
                 "nearest_urban_distance_km": float(r["nearest_urban_distance_km"]),
                 "province": str(r.get("province", "") or ""),
+                # Hansen tree cover passed through so the dashboard can
+                # categorise cells by land-cover bucket without re-doing
+                # the per-cell lookup. Defaults to 0 if the cache wasn't
+                # populated during training.
+                "tree_cover_pct_2000": float(r.get("tree_cover_pct_2000", 0) or 0),
+                "tree_loss_pct_recent": float(r.get("tree_loss_pct_recent", 0) or 0),
                 "lat": float(r["lat_grid"]),
                 "lon": float(r["lon_grid"]),
             },

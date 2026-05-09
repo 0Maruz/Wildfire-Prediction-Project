@@ -191,7 +191,63 @@ function displayData() {
 
   updateStatistics(predicted); // urgency summary always reflects all 7 days
   updateTimeline(predicted, latestBaseDate);
+  // Stash the *currently visible* prediction set on state so the CSV
+  // export button hands the operator exactly what they see — base-date
+  // filter, province filter, and day-selector filter all already applied.
+  state.visiblePredicted = dayFiltered;
   addLayersToMap();
+}
+
+// ===================================
+// CSV export
+//
+// Dumps the currently-visible prediction set to a real .csv file the
+// operator's spreadsheet can open. We deliberately write a minimal,
+// self-describing schema — lat / lon / predicted date / urgency / etc.
+// — rather than the raw GeoJSON properties bag so downstream consumers
+// don't have to know our internal property names.
+// ===================================
+function exportVisibleCellsCsv() {
+  const cells = state.visiblePredicted || [];
+  if (!cells.length) {
+    alert("Nothing to export — current filter has no cells.");
+    return;
+  }
+
+  const cols = [
+    "base_date", "predicted_fire_date", "days_until_fire", "raw_prediction",
+    "urgency_level", "lat", "lon", "province",
+    "historical_fire_count_30d", "fire_days_per_year",
+    "tree_cover_pct_2000", "tree_loss_pct_recent",
+    "nearest_urban_area", "nearest_urban_distance_km",
+  ];
+
+  const escape = v => {
+    if (v == null) return "";
+    const s = String(v);
+    return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  };
+
+  const rows = [cols.join(",")];
+  for (const f of cells) {
+    const p = f.properties;
+    rows.push(cols.map(c => escape(p[c])).join(","));
+  }
+
+  const baseDate = (cells[0].properties.base_date) || "unknown";
+  const province = state.selectedProvince === "all" ? "all" : state.selectedProvince.replace(/\s+/g, "_");
+  const day = state.selectedDay === "all" ? "all" : `day${state.selectedDay}`;
+  const filename = `fire_predictions_${baseDate}_${province}_${day}.csv`;
+
+  const blob = new Blob([rows.join("\n")], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
 }
 
 // Build / refresh the <select id="baseDatePicker"> options. The most
@@ -720,6 +776,26 @@ function updateStatistics(predicted) {
   document.getElementById("highCount").textContent = counts.HIGH;
   document.getElementById("mediumCount").textContent = counts.MEDIUM;
   document.getElementById("lowCount").textContent = counts.LOW;
+
+  // Land-cover bucket from Hansen tree_cover_pct_2000.
+  // Cutoffs match ecological convention: ≥50% canopy ≈ closed forest,
+  // 10-50% ≈ mosaic / disturbed forest / managed plantation,
+  // <10% ≈ open grassland or agricultural land. Useful for the operator
+  // to tell apart "wildfire" vs "agricultural burn" risk at a glance.
+  let forest = 0, mixed = 0, open = 0;
+  predicted.forEach(f => {
+    const c = f.properties.tree_cover_pct_2000;
+    if (c == null) return;
+    if (c >= 50)      forest++;
+    else if (c >= 10) mixed++;
+    else              open++;
+  });
+  const fEl = document.getElementById("lcForest");
+  const mEl = document.getElementById("lcMixed");
+  const oEl = document.getElementById("lcOpen");
+  if (fEl) fEl.textContent = forest;
+  if (mEl) mEl.textContent = mixed;
+  if (oEl) oEl.textContent = open;
 }
 
 function updateTimeline(predicted, baseDate) {
@@ -871,6 +947,13 @@ function bindEvents() {
       state.selectedProvince = provinceFilter.value;
       displayData();
     });
+  }
+
+  // CSV export — downloads exactly what the user sees right now (current
+  // base_date + province filter + day filter all applied).
+  const exportBtn = document.getElementById("exportCsvBtn");
+  if (exportBtn) {
+    exportBtn.addEventListener("click", exportVisibleCellsCsv);
   }
 
   document.getElementById("showObserved").addEventListener("change", displayData);

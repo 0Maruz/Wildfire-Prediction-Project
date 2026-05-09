@@ -147,6 +147,53 @@ html, body {
 .date-picker:hover  { background: rgba(255, 255, 255, 0.08); }
 .date-picker:focus  { outline: 1px solid rgba(245, 158, 11, 0.6); }
 
+.landcover-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.landcover-row {
+  display: grid;
+  grid-template-columns: 8px 1fr auto;
+  gap: 8px;
+  align-items: center;
+  font-size: 13px;
+  color: #d5d5d5;
+}
+.landcover-bar {
+  width: 8px;
+  height: 18px;
+  border-radius: 2px;
+}
+.landcover-bar.forest { background: #16a34a; }
+.landcover-bar.mixed  { background: #ca8a04; }
+.landcover-bar.open   { background: #dc2626; }
+.landcover-count {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.landcover-note {
+  font-size: 11px;
+  color: #888;
+  line-height: 1.4;
+  margin-bottom: 8px;
+}
+.export-btn {
+  width: 100%;
+  padding: 8px 10px;
+  background: rgba(245, 158, 11, 0.15);
+  color: #f59e0b;
+  border: 1px solid rgba(245, 158, 11, 0.4);
+  border-radius: 4px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.export-btn:hover  { background: rgba(245, 158, 11, 0.25); }
+.export-btn:active { background: rgba(245, 158, 11, 0.35); }
+
 /* ===================================
    SECTIONS
    =================================== */

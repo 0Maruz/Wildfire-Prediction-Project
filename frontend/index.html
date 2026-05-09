@@ -11,7 +11,7 @@
   <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css" />
 
   <!-- Custom CSS -->
-  <link rel="stylesheet" href="style.css?v=4" />
+  <link rel="stylesheet" href="style.css?v=5" />
 </head>
 <body>
 
@@ -88,6 +88,20 @@
     <div class="threshold-note" id="thresholdNote">
       Thresholds calibrated from real validation predictions.
     </div>
+  </div>
+
+  <!-- Land Cover Breakdown -->
+  <div class="section">
+    <h3>🌳 Land Cover (Hansen GFC)</h3>
+    <div class="landcover-grid">
+      <div class="landcover-row"><span class="landcover-bar forest"></span><span class="landcover-label">Forest (≥50%)</span><span class="landcover-count" id="lcForest">—</span></div>
+      <div class="landcover-row"><span class="landcover-bar mixed"></span><span class="landcover-label">Mixed (10–50%)</span><span class="landcover-count" id="lcMixed">—</span></div>
+      <div class="landcover-row"><span class="landcover-bar open"></span><span class="landcover-label">Open / Grassland (&lt;10%)</span><span class="landcover-count" id="lcOpen">—</span></div>
+    </div>
+    <div class="landcover-note">
+      Tree cover bucket per cell from Hansen GFC v1.11. Open cells correlate with agricultural-burn signals; forest cells suggest wildfire risk.
+    </div>
+    <button class="export-btn" id="exportCsvBtn">⬇ Export visible cells (CSV)</button>
   </div>
 
   <!-- Validation Metrics -->
@@ -175,6 +189,6 @@
 <!-- Scripts -->
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
-<script src="app.js?v=4"></script>
+<script src="app.js?v=5"></script>
 </body>
 </html>
