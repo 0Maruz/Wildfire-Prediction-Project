@@ -121,6 +121,33 @@ app.add_middleware(
 )
 
 
+# Catch-all exception handler — without this, an unexpected error bubbles
+# up as a 500 with the full Python traceback in the response body, which
+# leaks internal paths / library versions to the public. Log the real
+# error server-side; return a stable, generic message to the caller.
+import logging
+import traceback
+from fastapi.responses import JSONResponse
+
+_log = logging.getLogger("fire-date-api")
+
+
+@app.exception_handler(Exception)
+async def _unhandled_exception_handler(request: Request, exc: Exception):
+    _log.error(
+        "Unhandled exception on %s %s: %s\n%s",
+        request.method, request.url.path, exc, traceback.format_exc(),
+    )
+    return JSONResponse(
+        status_code=500,
+        content={
+            "error": "internal_server_error",
+            "detail": "An unexpected error occurred. Check server logs.",
+            "path": request.url.path,
+        },
+    )
+
+
 # ─── helpers ──────────────────────────────────────────────────────────────────
 
 def _predict_days(model, df: pd.DataFrame, features: list[str]) -> tuple[np.ndarray, np.ndarray]:
@@ -378,6 +405,15 @@ def predict_location(
     endpoint stays in sync with whatever resolution train.py / fetch_weather.py
     were run at. Callers can still override per-request if they need to.
     """
+    # Coordinate bounds — reject obviously invalid input rather than letting
+    # it propagate into a confusing 404 ("no data for cell (-99, 999)").
+    if not -90.0 <= lat <= 90.0:
+        raise HTTPException(status_code=400, detail=f"lat must be in [-90, 90], got {lat}")
+    if not -180.0 <= lon <= 180.0:
+        raise HTTPException(status_code=400, detail=f"lon must be in [-180, 180], got {lon}")
+    if not 0.001 <= grid_size <= 5.0:
+        raise HTTPException(status_code=400, detail=f"grid_size must be in [0.001, 5], got {grid_size}")
+
     model      = request.app.state.model
     df         = request.app.state.df
     features   = request.app.state.features
