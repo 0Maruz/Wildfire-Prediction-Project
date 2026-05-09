@@ -469,12 +469,27 @@ def append_geojson(observed: pd.DataFrame, predicted: pd.DataFrame, base_date, t
         except json.JSONDecodeError:
             print("⚠️ Corrupted GeoJSON → recreate")
 
-    # Drop only the predictions for the current base_date (preserve observed
-    # rows and predictions for prior base dates).
+    # Retention. Without pruning the GeoJSON grows by ~one prediction snapshot
+    # plus a fresh observed batch on every risk_map.run() — by month two the
+    # file would be tens of MB and slow on first dashboard load. Two limits:
+    #   • Keep the most recent MAX_BASE_DATE_SNAPSHOTS predicted snapshots
+    #     (incl. the one we're about to write, replacing any same-base prior).
+    #   • Drop observed features — we re-emit a fresh observed batch from the
+    #     latest densified FIRMS day a few lines down. Stale observed rows
+    #     just bloat the file; the date picker only needs predictions.
+    MAX_BASE_DATE_SNAPSHOTS = int(os.getenv("MAX_BASE_DATE_SNAPSHOTS", "7"))
+    existing = geojson.get("features", [])
+    predicted_only = [f for f in existing if f["properties"].get("source") == "predicted"]
+    # Snapshots to keep: most recent N-1, excluding the one we're rewriting.
+    base_dates = sorted(
+        {f["properties"].get("base_date") for f in predicted_only if f["properties"].get("base_date")},
+        reverse=True,
+    )
+    keep_dates = set(d for d in base_dates if d != base_date_str)
+    keep_dates = set(list(keep_dates)[: MAX_BASE_DATE_SNAPSHOTS - 1])
     geojson["features"] = [
-        f for f in geojson["features"]
-        if f["properties"].get("base_date") != base_date_str
-        or f["properties"].get("source") == "observed"
+        f for f in predicted_only
+        if f["properties"].get("base_date") in keep_dates
     ]
 
     # Top-level metadata so the frontend can read calibrated thresholds and
