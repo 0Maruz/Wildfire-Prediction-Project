@@ -46,6 +46,15 @@ outputs/**
 !outputs/riskmap/fire_dates_all.geojson
 !outputs/metadata/dataset_info.json
 
+# Bootstrap model + feature parquet — committed so Railway's first deploy
+# of the web service has a working model without needing a manual cron
+# trigger first. The daily cron job overwrites these in the mounted /srv
+# volume, so the in-repo copies are only the bootstrap baseline.
+# (full_features.parquet is ~60 MB; over time consider Git LFS if churn
+# becomes painful.)
+!outputs/models/lgbm_fire_date_model.pkl
+!outputs/features/full_features.parquet
+
 # Misc
 src.zip
 Science-Project/
