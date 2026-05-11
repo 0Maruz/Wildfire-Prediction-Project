@@ -21,11 +21,12 @@ __pycache__
 web/node_modules
 web/dist
 
-# The image is provisioned with empty volumes; data/ + outputs/ are
-# mounted at runtime on Railway. Bundling local copies just bloats the
-# image and risks stale models shipping to prod.
-data
-outputs
+# data/ + outputs/ ARE included — the entrypoint script (start.sh) seeds
+# the Railway volume from these on first boot, otherwise the web service
+# can't start before the daily cron has had a chance to run. Once the
+# volume has fresh contents, the in-image copies are ignored.
+# Exclude the training-history dir to keep image weight down.
+outputs/models/history
 src.zip
 
 # Local-only / secrets

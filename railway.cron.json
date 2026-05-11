@@ -5,7 +5,7 @@
     "dockerfilePath": "Dockerfile"
   },
   "deploy": {
-    "startCommand": "cd /app/src && python fetch_firms.py && python train.py",
+    "startCommand": "sh -c 'cd /app/src && python fetch_firms.py && python train.py'",
     "cronSchedule": "0 6 * * *",
     "restartPolicyType": "NEVER"
   }

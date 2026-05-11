@@ -48,9 +48,19 @@ ENV PYTHONUNBUFFERED=1 \
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy Python source + supporting artifacts (data/ is volume-mounted in prod).
+# Copy Python source + supporting artifacts.
 COPY src/ /app/src/
 COPY env.example /app/env.example
+
+# Bootstrap copies of data/ + outputs/ live at /app/bootstrap/. start.sh
+# seeds the empty Railway volume from these on first boot so the web
+# service can start before the cron has populated /srv. After the first
+# successful cron run, the volume holds the canonical state and these
+# in-image copies are effectively dead weight (~62 MB) — re-run the cron
+# to keep prod current.
+COPY outputs/ /app/bootstrap/outputs/
+COPY data/ /app/bootstrap/data/
+COPY scripts/start.sh /usr/local/bin/start.sh
 
 # Pull the built SPA out of the web-build stage. WEB_DIST_DIR points here so
 # api.py's catch-all SPA fallback finds index.html and the assets/ subtree.
@@ -60,6 +70,7 @@ COPY --from=web-build /web/dist /app/web/dist
 # to root in railway.cron.json since it writes into the mounted volume.
 RUN useradd --create-home --shell /usr/sbin/nologin appuser \
  && mkdir -p /srv/outputs /srv/data/raw /srv/data/firms /srv/data/weather \
+ && chmod +x /usr/local/bin/start.sh \
  && chown -R appuser:appuser /app /srv
 USER appuser
 
@@ -71,5 +82,7 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
   CMD curl -fsS "http://127.0.0.1:${PORT}/health" || exit 1
 
-WORKDIR /app/src
-CMD ["sh", "-c", "uvicorn api:app --host 0.0.0.0 --port ${PORT:-8000}"]
+# ENTRYPOINT seeds the volume + execs whatever was passed in. The web
+# service uses the default branch (uvicorn); the cron service overrides
+# via railway.cron.json's startCommand, which becomes "$@" here.
+ENTRYPOINT ["/usr/local/bin/start.sh"]
