@@ -31,6 +31,18 @@ cd src && python fetch_firms.py [--days 1-10]
 #      training pipeline silently runs without weather features.
 cd src && python fetch_weather.py [--start YYYY-MM-DD] [--end YYYY-MM-DD] [--limit-cells N]
 
+# 1c. (OPTIONAL) Pull GISTDA NRT hotspots (VIIRS NPP + MODIS, no auth required)
+#      into data/gistda/gistda_hotspots.parquet. No API key needed. Accumulative cache.
+#      Adds Thai land-use annotation (lu_name) per detection — not yet wired into training.
+#      Run without args to fetch all currently available data, or specify a date range.
+cd src && python fetch_gistda_hotspots.py [--start YYYY-MM-DD] [--end YYYY-MM-DD]
+
+# 1d. (OPTIONAL, run-once) Fetch GISTDA Thai forest classification + crop-type polygons
+#      (3P_Forest: 5 forest types; agriculture: maize/rice) and rasterise to the 0.1° grid.
+#      Output: data/static/gistda_lulc_per_cell.parquet. Not yet wired into training.
+#      Requires pyproj (pip install -r requirements.txt). Takes ~5-10 min.
+cd src && python fetch_gistda_lulc.py
+
 # 2. Train the model (runs the full data → features → tune → save pipeline)
 cd src && python train.py [--n-iter 20] [--n-splits 5] [--only lightgbm,xgboost]
 #                          [--quick]            ← 10 iter × 3 splits, LGBM only (~3 min)
@@ -67,6 +79,8 @@ There is no test suite, linter, or build step.
 | `fetch_firms.py` | Fetches VIIRS NRT hotspots from NASA FIRMS with retry/backoff; writes accumulative `data/firms/firms_all.parquet`. |
 | `fetch_weather.py` | **Optional.** Fetches real ECMWF ERA5 daily aggregates from Open-Meteo Archive (no key) for every active FIRMS cell, caches to `data/weather/weather_cache.parquet`. Idempotent — only fetches missing (cell, date) tuples. |
 | `fetch_treecover.py` | **Optional, run-once.** Streams Hansen Global Forest Change v1.11 `treecover2000` + `lossyear` rasters via HTTP range reads, aggregates 30 m source pixels into the project's 0.1° grid, writes per-cell `tree_cover_pct_2000` + `tree_loss_pct_recent` to `data/static/tree_cover_per_cell.parquet`. Adds vegetation context that the model otherwise lacks. |
+| `fetch_gistda_hotspots.py` | **Optional, daily.** Fetches GISTDA-processed VIIRS NPP + MODIS hotspots (no auth) from `FR_Fire/hotspot_npp_daily` and `FR_Fire/hotspot_daily` ArcGIS REST services. Accumulative cache at `data/gistda/gistda_hotspots.parquet`. Unlike NASA FIRMS, GISTDA attaches Thai land-use class (`lu_name`) and administrative names per detection — useful for distinguishing agricultural burns from wildfire. No FRP or brightness; those columns are NaN. Not yet wired into training. |
+| `fetch_gistda_lulc.py` | **Optional, run-once.** Fetches GISTDA Thai forest classification polygons (`Mhesi/3P_Forest`: 5 forest-management types) and crop-type polygons (`Mhesi/agriculture`: maize, rice) then rasterises them onto the 0.1° grid. Output: `data/static/gistda_lulc_per_cell.parquet` with boolean flags `in_{alro_forest,plantation,mangrove,national_forest,conservation_forest,maize,rice}` and matching area-in-rai columns. Requires pyproj for UTM→WGS84 reprojection of agriculture layer. Not yet wired into training. |
 | `io_utils.py` | Format-agnostic table I/O. `read_table` / `write_table` / `resolve_existing` dispatch on file extension (`.csv` ↔ `.parquet`); `list_tables` resolves dirs/globs and prefers Parquet when both extensions exist for the same basename. **Use these helpers** instead of `pd.read_csv` / `pd.to_csv` so files stay swappable. |
 | `data_loader.py` | Pure I/O with fail-fast schema validation: loads raw + FIRMS hotspot tables (CSV or Parquet via `io_utils`) — `_validate_firms_schema` rejects truncated / corrupt files before training burns 30 min. Cleans, snaps to grid, aggregates to daily cell-day plus time-of-day buckets (Thai-local night / afternoon counts) and per-cell `n_satellites_today` (multi-satellite consensus). **Densifies active cells** over the date range, drops hotspots inside curated urban areas (`filter_urban_hotspots`), and left-joins the optional weather + Hansen tree-cover caches. |
 | `urban_areas.py` | Curated list of ~40 Thai urban centres with hand-tuned exclusion radii. `classify_urban(lats, lons, buffer_km)` returns `(is_urban, nearest_dist_km, nearest_name)` for any batch of cells. Used at training time (drop urban hotspots) and at inference time (drop urban predictions, annotate "nearest city"). |

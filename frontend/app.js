@@ -36,7 +36,9 @@ const state = {
   selectedProvince: "all",
   thresholds: null,   // { CRITICAL, HIGH, MEDIUM, LOW }
   metrics: null,      // held-out test metrics
-  layers: { observed: null, predicted: null, heatmap: null },
+  layers: { observed: null, predicted: null, heatmap: null, livefire: null },
+  // Live-fire state: tracks fetch status and the auto-refresh timer.
+  liveFireMeta: { status: "idle", count: 0, lastFetch: null, timerId: null },
 };
 
 const URGENCY_COLORS = {
@@ -46,6 +48,15 @@ const URGENCY_COLORS = {
   LOW: "#10b981",
   NONE: "#6b7280",
 };
+
+// GISTDA NRT VIIRS hotspot endpoint — public, no auth required.
+// Updated ~12-hourly by GISTDA from the same Suomi-NPP satellite as FIRMS.
+const GISTDA_VIIRS_URL =
+  "https://gistdaportal.gistda.or.th/data/rest/services/FR_Fire/hotspot_npp_daily/MapServer/0/query";
+const GISTDA_MODIS_URL =
+  "https://gistdaportal.gistda.or.th/data/rest/services/FR_Fire/hotspot_daily/MapServer/0/query";
+const LIVE_FIRE_COLOR   = "#06b6d4";   // cyan — distinct from urgency palette and purple observed
+const LIVE_REFRESH_MS   = 30 * 60 * 1000;  // auto-refresh every 30 min when layer is on
 
 // ===================================
 // Init
@@ -512,8 +523,7 @@ function _clampedRadiusMeters(lat, baseM, minPx, maxPx) {
 // Layers
 // ===================================
 function createObservedLayer(features) {
-  const cluster = document.getElementById("clusterMarkers").checked;
-  const layer = cluster ? L.markerClusterGroup() : L.layerGroup();
+  const layer = L.layerGroup();
 
   // Shared canvas renderer = much faster than the default SVG renderer when
   // there are many markers (8k+ cells at finer grid sizes).
@@ -529,7 +539,7 @@ function createObservedLayer(features) {
     const marker = L.circle([lat, lon], {
       radius: radiusM,
       renderer: renderer,
-      fillColor: "#ff5722", color: "#fff", weight: 1, fillOpacity: 0.8,
+      fillColor: "#9333ea", color: "#fff", weight: 1, fillOpacity: 0.8,
     });
     marker._baseRadiusM = baseM;
     marker._minPx = px.min;
@@ -537,7 +547,7 @@ function createObservedLayer(features) {
     marker._anchorLat = lat;
     marker.bindPopup(`
       <div class="popup">
-        <b style="color:#ff5722;">🔥 Observed Fire (FIRMS)</b><br>
+        <b style="color:#9333ea;">🔥 Observed Fire (FIRMS)</b><br>
         <small>Date: ${props.date}</small><br>
         <small>FIRMS detections: ${props.fire_count ?? "—"}</small><br>
         <small>Location: ${lat.toFixed(3)}°, ${lon.toFixed(3)}°</small>
@@ -714,6 +724,7 @@ function createHeatmapLayer(features) {
     value: f.properties.raw_prediction != null
       ? Number(f.properties.raw_prediction)
       : Number(f.properties.days_until_fire),
+    urgency: f.properties.urgency_level || "NONE",
   })).filter(p => isFinite(p.value));
 
   if (points.length === 0) return null;
@@ -752,7 +763,7 @@ function createHeatmapLayer(features) {
         if (p.lon < nw.lng - bufferLng || p.lon > se.lng + bufferLng) continue;
         const px = ((p.lon - nw.lng) / lonSpan) * size.x;
         const py = ((nw.lat - p.lat) / latSpan) * size.y;
-        localPoints.push({ px, py, value: p.value });
+        localPoints.push({ px, py, value: p.value, urgency: p.urgency });
       }
       if (localPoints.length === 0) return tile;
 
@@ -768,6 +779,7 @@ function createHeatmapLayer(features) {
           const y = (py + 0.5) * STRIDE;
 
           let nearestValue = null;
+          let nearestUrgency = null;
           let nearestDistSq = Infinity;
           let blobAlpha = 0;   // tracked separately for soft circular edges
 
@@ -784,6 +796,7 @@ function createHeatmapLayer(features) {
             if (d2 < nearestDistSq) {
               nearestDistSq = d2;
               nearestValue = lp.value;
+              nearestUrgency = lp.urgency;
             }
 
             // Quadratic falloff for blob alpha — goes to 0 exactly at cutoff
@@ -798,7 +811,7 @@ function createHeatmapLayer(features) {
             continue;
           }
 
-          const color = _valueToColor(nearestValue, thresholds);
+          const color = _hexToRgb(URGENCY_COLORS[nearestUrgency] || URGENCY_COLORS.NONE);
           data[idx]     = color.r;
           data[idx + 1] = color.g;
           data[idx + 2] = color.b;
@@ -938,7 +951,9 @@ function updateTimeline(predicted, baseDate) {
 // observed/predicted marker layers. That keeps the smooth gradient as the
 // background while the dot markers stay clickable on top for popups.
 // ===================================
-const LAYER_RENDER_ORDER = ["heatmap", "observed", "predicted"];
+// heatmap → observed → livefire → predicted keeps the NRT dots above the gradient
+// but below clickable predicted pins, so popups work in dense areas.
+const LAYER_RENDER_ORDER = ["heatmap", "observed", "livefire", "predicted"];
 
 function clearLayers() {
   for (const k of LAYER_RENDER_ORDER) {
@@ -957,7 +972,7 @@ function addLayersToMap() {
 // Re-apply the [minPx, maxPx] pixel clamp to every dot whenever the user zooms.
 // Heatmap re-renders natively on zoom — only the L.circle layers need this.
 function _reclampAllMarkers() {
-  for (const k of ["observed", "predicted"]) {
+  for (const k of ["observed", "predicted", "livefire"]) {
     const layer = state.layers[k];
     if (!layer || typeof layer.eachLayer !== "function") continue;
     layer.eachLayer(m => {
@@ -978,6 +993,175 @@ function selectDay(day) {
     btn.classList.toggle("active", btn.dataset.day === String(day));
   });
   displayData();
+}
+
+// ===================================
+// Live-fire layer — GISTDA VIIRS NRT
+//
+// Fetches today's active fire detections directly from GISTDA's public
+// ArcGIS REST service (no API key required). The same VIIRS Suomi-NPP
+// satellite as NASA FIRMS, independently processed by Thailand's national
+// space agency with Thai land-use labels already attached.
+//
+// Displayed as cyan dots so operators can visually compare:
+//   • MODEL PREDICTION (urgency-coloured heatmap + dots)
+//   • ACTUAL FIRMS detections used for training (purple dots, toggle)
+//   • LIVE GISTDA VIIRS right now (cyan dots, this layer)
+// ===================================
+
+function _setLiveFireStatus(status, count, errMsg) {
+  state.liveFireMeta.status = status;
+  state.liveFireMeta.count  = count;
+  if (status === "ok") state.liveFireMeta.lastFetch = new Date();
+
+  const el = document.getElementById("liveFireStatus");
+  if (!el) return;
+
+  if (status === "idle") {
+    el.textContent = "";
+    el.className = "live-fire-status";
+  } else if (status === "loading") {
+    el.textContent = "⟳ Fetching live hotspots…";
+    el.className = "live-fire-status loading";
+  } else if (status === "ok") {
+    const t = state.liveFireMeta.lastFetch.toLocaleTimeString();
+    el.textContent = `${count} hotspot${count !== 1 ? "s" : ""} · refreshed ${t}`;
+    el.className = "live-fire-status ok";
+  } else {
+    el.textContent = `Could not load: ${errMsg || "network error"}`;
+    el.className = "live-fire-status error";
+  }
+
+  // Show / hide the legend row for live fires
+  const legendItem = document.getElementById("liveFireLegendItem");
+  if (legendItem) legendItem.style.display = status === "ok" && count > 0 ? "" : "none";
+}
+
+async function _queryGistdaLayer(url) {
+  const params = new URLSearchParams({
+    where: "1=1",
+    geometry: "96,4,107,22",
+    geometryType: "esriGeometryEnvelope",
+    spatialRel: "esriSpatialRelIntersects",
+    outFields: "latitude,longitude,confident,lu_name,pv_tn,ap_tn,date,time,satellite",
+    f: "json",
+  });
+  const res = await fetch(`${url}?${params}`, {
+    signal: AbortSignal.timeout(20000),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const payload = await res.json();
+  if (payload.error) throw new Error(payload.error.message || "ArcGIS error");
+  return payload.features || [];
+}
+
+function createLiveFireLayer(features) {
+  const layer = L.layerGroup();
+  const renderer = L.canvas({ padding: 0.5 });
+  const gridM = _gridSizeMeters();
+  const frac  = 0.22;
+  const baseM = _dotRadiusMeters(frac, gridM);
+  const px    = _clampPxForFrac(frac);
+
+  features.forEach(feat => {
+    const a = feat.attributes || {};
+    const lat = parseFloat(a.latitude);
+    const lon = parseFloat(a.longitude);
+    if (!isFinite(lat) || !isFinite(lon)) return;
+
+    const radiusM = _clampedRadiusMeters(lat, baseM, px.min, px.max);
+    const marker = L.circle([lat, lon], {
+      radius: radiusM,
+      renderer,
+      fillColor: LIVE_FIRE_COLOR,
+      color: "#fff",
+      weight: 1,
+      fillOpacity: 0.88,
+    });
+    marker._baseRadiusM = baseM;
+    marker._minPx = px.min;
+    marker._maxPx = px.max;
+    marker._anchorLat = lat;
+
+    const dateMs  = a.date;
+    const dateStr = dateMs ? new Date(dateMs).toLocaleDateString() : "—";
+    const timeStr = (a.time || "").trim() || "—";
+    const conf    = a.confident || "—";
+    const lu      = a.lu_name  || "—";
+    const prov    = a.pv_tn    || "—";
+    const dist    = a.ap_tn    || "—";
+    const sat     = a.satellite || "VIIRS-NPP";
+
+    marker.bindPopup(`
+      <div class="popup">
+        <b style="color:${LIVE_FIRE_COLOR};">🛰 Live Hotspot · GISTDA ${sat}</b><br>
+        <div class="popup-block">
+          <b>${dateStr} ${timeStr}</b><br>
+          <small>${prov}${dist ? " · " + dist : ""}</small>
+        </div>
+        <small>Land use: ${lu}</small><br>
+        <small>Confidence: ${conf}</small><br>
+        <small>${lat.toFixed(3)}°N, ${lon.toFixed(3)}°E</small>
+      </div>
+    `);
+    layer.addLayer(marker);
+  });
+  return layer;
+}
+
+async function refreshLiveFires() {
+  const toggle = document.getElementById("showLiveFires");
+  if (!toggle || !toggle.checked) return;
+
+  _setLiveFireStatus("loading", 0);
+
+  try {
+    // Fetch VIIRS NPP (primary) and MODIS (secondary) in parallel.
+    const [viirs, modis] = await Promise.allSettled([
+      _queryGistdaLayer(GISTDA_VIIRS_URL),
+      _queryGistdaLayer(GISTDA_MODIS_URL),
+    ]);
+    const viirsFeats = viirs.status  === "fulfilled" ? viirs.value  : [];
+    const modisFeats = modis.status  === "fulfilled" ? modis.value  : [];
+
+    if (viirs.status === "rejected") {
+      console.warn("GISTDA VIIRS fetch failed:", viirs.reason);
+    }
+
+    const allFeats = [...viirsFeats, ...modisFeats];
+
+    // Remove stale layer before adding the fresh one
+    if (state.layers.livefire) {
+      map.removeLayer(state.layers.livefire);
+      state.layers.livefire = null;
+    }
+
+    if (allFeats.length > 0) {
+      state.layers.livefire = createLiveFireLayer(allFeats);
+      map.addLayer(state.layers.livefire);
+    }
+
+    _setLiveFireStatus("ok", allFeats.length);
+  } catch (err) {
+    console.error("Live fire fetch failed:", err);
+    _setLiveFireStatus("error", 0, err.message);
+  }
+
+  // Schedule next refresh while the toggle is on
+  if (state.liveFireMeta.timerId) clearTimeout(state.liveFireMeta.timerId);
+  state.liveFireMeta.timerId = setTimeout(refreshLiveFires, LIVE_REFRESH_MS);
+}
+
+function stopLiveFires() {
+  if (state.liveFireMeta.timerId) {
+    clearTimeout(state.liveFireMeta.timerId);
+    state.liveFireMeta.timerId = null;
+  }
+  if (state.layers.livefire) {
+    map.removeLayer(state.layers.livefire);
+    state.layers.livefire = null;
+  }
+  _setLiveFireStatus("idle", 0);
 }
 
 function bindEvents() {
@@ -1020,7 +1204,6 @@ function bindEvents() {
   }
 
   document.getElementById("showObserved").addEventListener("change", displayData);
-  document.getElementById("clusterMarkers").addEventListener("change", displayData);
   document.getElementById("showCellPins").addEventListener("change", displayData);
 
   // The Smoothing-radius slider lives inside the prediction toggle group:
@@ -1048,6 +1231,17 @@ function bindEvents() {
     radiusValue.textContent = `${radiusInput.value} px`;
   });
   radiusInput.addEventListener("change", displayData);
+
+  const liveFireToggle = document.getElementById("showLiveFires");
+  if (liveFireToggle) {
+    liveFireToggle.addEventListener("change", () => {
+      if (liveFireToggle.checked) {
+        refreshLiveFires();
+      } else {
+        stopLiveFires();
+      }
+    });
+  }
 }
 
 // ===================================

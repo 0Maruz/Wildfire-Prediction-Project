@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -28,6 +28,32 @@ except ImportError:  # pragma: no cover
     XGBRegressor = None  # type: ignore[assignment]
 
 log = logging.getLogger("model")
+
+
+class EnsembleRegressor:
+    """Averaging ensemble of fixed-hyperparameter models with different seeds.
+
+    Wraps a list of pre-fitted regressors and exposes `predict()` (arithmetic
+    mean) and `feature_importances_` (averaged). Picklable — safe for joblib.
+    """
+
+    def __init__(self, models: List[Any]) -> None:
+        self.models = models
+
+    def predict(self, X: Any) -> np.ndarray:
+        preds = np.stack([m.predict(X) for m in self.models], axis=0)
+        return preds.mean(axis=0)
+
+    @property
+    def feature_importances_(self) -> Optional[np.ndarray]:
+        imps = [
+            m.feature_importances_
+            for m in self.models
+            if hasattr(m, "feature_importances_")
+        ]
+        if not imps:
+            return None
+        return np.stack(imps, axis=0).mean(axis=0)
 
 
 @dataclass
@@ -91,14 +117,16 @@ def candidates(random_state: int = 42) -> Dict[str, Candidate]:
             name="lightgbm",
             builder=_lgbm_builder,
             param_distributions={
-                "n_estimators": [200, 400, 600],
-                "learning_rate": [0.02, 0.05, 0.08],
-                "num_leaves": [15, 31, 63],
-                "min_child_samples": [30, 50, 100],
-                "subsample": [0.8, 1.0],
-                "colsample_bytree": [0.8, 1.0],
-                "reg_alpha": [0.0, 0.1, 1.0],
-                "reg_lambda": [0.0, 0.1, 1.0],
+                "n_estimators": [300, 500, 700, 1000],
+                "learning_rate": [0.01, 0.02, 0.05, 0.08, 0.1, 0.15],
+                "num_leaves": [31, 63, 127, 255],
+                "max_depth": [-1, 6, 10, 15, 20],
+                "min_child_samples": [10, 20, 30, 50, 100],
+                "subsample": [0.6, 0.7, 0.8, 0.9, 1.0],
+                "colsample_bytree": [0.6, 0.7, 0.8, 0.9, 1.0],
+                "reg_alpha": [0.0, 0.1, 0.5, 1.0, 5.0, 10.0],
+                "reg_lambda": [0.0, 0.1, 0.5, 1.0, 5.0, 10.0],
+                "min_split_gain": [0.0, 0.01, 0.05, 0.1],
             },
         )
     if XGBRegressor is not None:
@@ -106,14 +134,15 @@ def candidates(random_state: int = 42) -> Dict[str, Candidate]:
             name="xgboost",
             builder=_xgb_builder,
             param_distributions={
-                "n_estimators": [200, 400, 600],
-                "max_depth": [4, 6, 8],
-                "learning_rate": [0.02, 0.05, 0.08],
-                "subsample": [0.8, 1.0],
-                "colsample_bytree": [0.8, 1.0],
-                "min_child_weight": [1, 5, 10],
-                "reg_alpha": [0.0, 0.1, 1.0],
-                "reg_lambda": [0.5, 1.0, 2.0],
+                "n_estimators": [300, 500, 700, 1000],
+                "max_depth": [4, 6, 8, 10, 12],
+                "learning_rate": [0.01, 0.02, 0.05, 0.08, 0.1, 0.15],
+                "subsample": [0.6, 0.7, 0.8, 0.9, 1.0],
+                "colsample_bytree": [0.6, 0.7, 0.8, 0.9, 1.0],
+                "min_child_weight": [1, 3, 5, 10, 20],
+                "reg_alpha": [0.0, 0.1, 0.5, 1.0, 5.0, 10.0],
+                "reg_lambda": [0.5, 1.0, 2.0, 5.0, 10.0],
+                "gamma": [0.0, 0.05, 0.1, 0.3, 1.0],
             },
         )
     return cands
@@ -142,6 +171,7 @@ def tune_candidate(
     n_splits: int = 5,
     random_state: int = 42,
     verbose: int = 0,
+    sample_weight: Optional[np.ndarray] = None,
 ) -> Tuple[Any, Dict[str, Any], float]:
     """Randomized search with TimeSeriesSplit, scored on neg-MAE."""
     estimator = cand.builder(random_state)
@@ -159,10 +189,46 @@ def tune_candidate(
     )
 
     log.info("Tuning %s: %d iter × %d splits", cand.name, n_iter, n_splits)
-    search.fit(X, y)
+    fit_kwargs: Dict[str, Any] = {}
+    if sample_weight is not None:
+        fit_kwargs["sample_weight"] = sample_weight
+    search.fit(X, y, **fit_kwargs)
     best_cv_mae = -float(search.best_score_)
     log.info("%s best CV MAE = %.4f, params = %s", cand.name, best_cv_mae, search.best_params_)
     return search.best_estimator_, search.best_params_, best_cv_mae
+
+
+def build_ensemble(
+    cand: Candidate,
+    best_params: Dict[str, Any],
+    X: pd.DataFrame,
+    y: pd.Series,
+    n_ensemble: int = 5,
+    base_seed: int = 42,
+    sample_weight: Optional[np.ndarray] = None,
+) -> EnsembleRegressor:
+    """Fit `n_ensemble` copies of `cand` at `best_params` with different random seeds.
+
+    Each model sees the same training data but uses a different seed for
+    feature/sample subsampling, so their errors are weakly correlated.
+    Averaging reduces prediction variance without touching bias — typically
+    yields 3–8% MAE improvement over a single model.
+    """
+    models: List[Any] = []
+    for i in range(n_ensemble):
+        seed = base_seed + i * 37
+        m = cand.builder(seed)
+        m.set_params(**best_params)
+        if sample_weight is not None:
+            m.fit(X, y, sample_weight=sample_weight)
+        else:
+            m.fit(X, y)
+        models.append(m)
+    log.info(
+        "Ensemble: trained %d %s models (seeds %d…%d)",
+        n_ensemble, cand.name, base_seed, base_seed + (n_ensemble - 1) * 37,
+    )
+    return EnsembleRegressor(models)
 
 
 def select_best(
@@ -175,6 +241,7 @@ def select_best(
     n_splits: int = 5,
     random_state: int = 42,
     only: Optional[Tuple[str, ...]] = None,
+    sample_weight: Optional[np.ndarray] = None,
 ) -> Dict[str, Any]:
     """Tune every candidate and return a result dict for the best validation-MAE model."""
     cands = candidates(random_state=random_state)
@@ -195,6 +262,7 @@ def select_best(
                 n_iter=n_iter,
                 n_splits=n_splits,
                 random_state=random_state,
+                sample_weight=sample_weight,
             )
         except Exception as exc:
             log.exception("Tuning failed for %s: %s", name, exc)

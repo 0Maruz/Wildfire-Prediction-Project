@@ -13,3 +13,4 @@ requests
 pyarrow
 shapely>=2.0
 rasterio>=1.4
+pyproj>=3.6

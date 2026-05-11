@@ -37,7 +37,7 @@ from features import (
     resolve_features,
 )
 from io_utils import resolve_existing, write_table
-from model import evaluate, select_best
+from model import build_ensemble, candidates as _model_candidates, evaluate, select_best
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s | %(levelname)s | %(name)s | %(message)s"
@@ -67,6 +67,36 @@ def _paths() -> dict:
         "feature_dir": os.path.join(output_dir, "features"),
         "meta_dir": os.path.join(output_dir, "metadata"),
     }
+
+
+def _compute_sample_weights(
+    y: pd.Series,
+    dates: pd.Series,
+    recency_halflife_days: float = 60.0,
+) -> np.ndarray:
+    """Inverse-class-frequency × recency-decay sample weights.
+
+    Class balance: each label value (1–7 days) gets weight ∝ 1/count so rare
+    near-term samples compete equally with abundant long-horizon ones.
+    Recency decay: exp(-days_ago / halflife) so recent observations are
+    favoured — the model tracks current seasonal/fire-weather state better.
+    Returns a 1-D float array normalized to unit mean.
+    """
+    label_counts = y.value_counts()
+    n_classes = len(label_counts)
+    n_samples = len(y)
+    class_weight_map = (n_samples / (n_classes * label_counts)).to_dict()
+    sw_class = y.map(class_weight_map).to_numpy().astype(float)
+
+    max_date = pd.to_datetime(dates).max()
+    days_ago = (max_date - pd.to_datetime(dates)).dt.days.to_numpy().astype(float)
+    sw_recency = np.exp(-days_ago / max(recency_halflife_days, 1.0))
+
+    sw = sw_class * sw_recency
+    mean_sw = float(sw.mean())
+    if mean_sw > 0:
+        sw /= mean_sw
+    return sw
 
 
 def chronological_split(
@@ -121,7 +151,7 @@ def chronological_split(
 
 
 def main(
-    n_iter: int = 20,
+    n_iter: int = 50,
     n_splits: int = 5,
     val_fraction: float = 0.2,
     test_fraction: float = 0.2,
@@ -254,6 +284,16 @@ def main(
     X_val,   y_val   = val_df[feature_cols],   val_df["days_until_fire"]
     X_test,  y_test  = test_df[feature_cols],  test_df["days_until_fire"]
 
+    log.info("==== STEP 4b: compute sample weights ====")
+    sample_weight_train = _compute_sample_weights(y_train, train_df["date"])
+    log.info(
+        "Training sample weights (class-balance × exp(-days/60)): "
+        "min=%.3f  max=%.3f  mean=%.3f",
+        float(sample_weight_train.min()),
+        float(sample_weight_train.max()),
+        float(sample_weight_train.mean()),
+    )
+
     log.info("==== STEP 5: tune candidate models on TimeSeriesSplit ====")
     selection = select_best(
         X_train=X_train,
@@ -265,6 +305,7 @@ def main(
         n_splits=n_splits,
         random_state=random_state,
         only=only,
+        sample_weight=sample_weight_train,
     )
     best_name = selection["best_name"]
     best_model = selection["best_model"]
@@ -341,14 +382,26 @@ def main(
         "Urgency thresholds (fixed domain): CRITICAL=0d, HIGH≤2d, MEDIUM≤4d, LOW≤7d"
     )
 
-    # 6c. Refit on train + val to produce the final deployed artefact
+    # 6c. Build deployment ensemble on train + val
     full_X = pd.concat([X_train, X_val])
     full_y = pd.concat([y_train, y_val])
-    best_model.fit(full_X, full_y)
+    full_dates = pd.concat([train_df["date"], val_df["date"]])
+    full_sw = _compute_sample_weights(full_y, full_dates)
+
+    best_cand = _model_candidates(random_state=random_state)[best_name]
+    best_params = selection["all_results"][best_name]["best_params"]
+    best_model = build_ensemble(
+        cand=best_cand,
+        best_params=best_params,
+        X=full_X,
+        y=full_y,
+        n_ensemble=5,
+        base_seed=random_state,
+        sample_weight=full_sw,
+    )
     log.info(
-        "Refit complete on %d rows (train + val). "
-        "Final artefact will NOT be evaluated again on val to avoid leakage.",
-        len(full_X),
+        "Ensemble of 5 %s models fit on %d rows (train+val) with sample weights.",
+        best_name, len(full_X),
     )
 
     log.info("==== STEP 7: persist artifacts ====")
@@ -450,7 +503,7 @@ def main(
 
 def _cli() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Train fire-date prediction model")
-    p.add_argument("--n-iter", type=int, default=20, help="RandomizedSearchCV iterations")
+    p.add_argument("--n-iter", type=int, default=50, help="RandomizedSearchCV iterations")
     p.add_argument("--n-splits", type=int, default=5, help="TimeSeriesSplit folds")
     p.add_argument("--val-fraction", type=float, default=0.2)
     p.add_argument("--test-fraction", type=float, default=0.2)

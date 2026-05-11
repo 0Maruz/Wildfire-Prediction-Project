@@ -11,7 +11,7 @@
   <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css" />
 
   <!-- Custom CSS -->
-  <link rel="stylesheet" href="style.css?v=7" />
+  <link rel="stylesheet" href="style.css?v=8" />
 </head>
 <body>
 
@@ -142,7 +142,7 @@
       </label>
     </div>
 
-    <div class="option-group">
+    <div class="option-group" style="display:none">
       <label class="toggle-label">
         <input type="checkbox" id="showPredicted" checked>
         <span>Show Predictions (smooth heatmap)</span>
@@ -150,9 +150,9 @@
       <div class="slider-group" id="heatRadiusGroup">
         <label class="slider-label">
           Smoothing radius
-          <span class="slider-value" id="heatRadiusValue">50 px</span>
+          <span class="slider-value" id="heatRadiusValue">33 px</span>
         </label>
-        <input type="range" id="heatRadius" min="15" max="120" step="1" value="50">
+        <input type="range" id="heatRadius" min="15" max="120" step="1" value="33">
         <div class="slider-hint">
           Each cell's centre is rendered in its urgency colour at all zoom
           levels. Larger radius = neighbours blend further.
@@ -160,18 +160,20 @@
       </div>
     </div>
 
-    <div class="option-group">
+
+    <div class="option-group" style="display:none">
       <label class="toggle-label">
-        <input type="checkbox" id="clusterMarkers">
-        <span>Cluster Observed Markers</span>
+        <input type="checkbox" id="showCellPins" checked>
+        <span>Show Clickable Cell Pins</span>
       </label>
     </div>
 
     <div class="option-group">
-      <label class="toggle-label">
-        <input type="checkbox" id="showCellPins">
-        <span>Show Clickable Cell Pins</span>
+      <label class="toggle-label" style="border-color: rgba(6,182,212,0.25);">
+        <input type="checkbox" id="showLiveFires">
+        <span style="color:#06b6d4;">Live Fires — GISTDA VIIRS (now)</span>
       </label>
+      <div id="liveFireStatus" class="live-fire-status"></div>
     </div>
   </div>
 
@@ -197,13 +199,16 @@
     <div class="legend-item"><div class="legend-color high"></div><span>High</span></div>
     <div class="legend-item"><div class="legend-color medium"></div><span>Medium</span></div>
     <div class="legend-item"><div class="legend-color low"></div><span>Low</span></div>
-    <div class="legend-item"><div class="legend-color observed"></div><span>Observed Fire</span></div>
+    <div class="legend-item"><div class="legend-color observed"></div><span>Observed (FIRMS)</span></div>
+    <div class="legend-item" id="liveFireLegendItem" style="display:none;">
+      <div class="legend-color live-fire"></div><span>Live VIIRS (GISTDA)</span>
+    </div>
   </div>
 </div>
 
 <!-- Scripts -->
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
-<script src="app.js?v=7"></script>
+<script src="app.js?v=8"></script>
 </body>
 </html>

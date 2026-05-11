@@ -234,6 +234,11 @@ def add_temporal_features(df: pd.DataFrame) -> pd.DataFrame:
 
     df["frp_trend_1d"] = grp["frp_sum"].diff().fillna(0)
     df["frp_trend_3d"] = grp["frp_sum"].diff(3).fillna(0)
+    df["frp_trend_7d"] = grp["frp_sum"].diff(7).fillna(0)
+
+    # Rolling fire-count std — burst vs steady patterns
+    rolled_fire_std = grp["fire_count"].rolling(7, min_periods=2).std().fillna(0)
+    df["fire_std_7d"] = rolled_fire_std.reset_index(level=GROUP_KEYS, drop=True)
 
     df["fire_count_today"] = df["fire_count"].fillna(0)
     df["frp_sum_today"] = df["frp_sum"].fillna(0)
@@ -254,6 +259,22 @@ def add_temporal_features(df: pd.DataFrame) -> pd.DataFrame:
         df["tree_cover_pct_2000"] = df["tree_cover_pct_2000"].fillna(0)
     if "tree_loss_pct_recent" in df.columns:
         df["tree_loss_pct_recent"] = df["tree_loss_pct_recent"].fillna(0)
+
+    # Derived ratio / acceleration features (from FIRMS-sourced rolls above)
+    df["fire_acceleration"] = (
+        df["fire_sum_7d"].to_numpy() / 7.0
+        - df["fire_sum_14d"].to_numpy() / 14.0
+    )
+    df["frp_intensity_7d"] = (
+        df["frp_sum_7d"].to_numpy()
+        / df["fire_sum_7d"].clip(lower=1).to_numpy()
+    ).astype(float)
+    if "night_fire_count" in df.columns:
+        df["night_fire_ratio"] = (
+            df["night_fire_count"].to_numpy()
+            / df["fire_count_today"].clip(lower=1).to_numpy()
+        ).astype(float)
+        df["night_fire_ratio"] = df["night_fire_ratio"].fillna(0.0)
 
     # ── neighbour lags / rolls (spatial signal from REAL adjacent-cell fires) ──
     if "neighbor_fire_today" in df.columns:
@@ -298,6 +319,22 @@ def add_temporal_features(df: pd.DataFrame) -> pd.DataFrame:
         for w in NEIGHBOR_ROLLS:
             rolled = grp["wide_neighbor_fire_today"].rolling(w, min_periods=1).sum()
             df[f"wide_neighbor_fire_sum_{w}d"] = rolled.reset_index(
+                level=GROUP_KEYS, drop=True
+            )
+        # Spread velocity for outer ring — mirrors inner-ring velocity
+        df["wide_neighbor_fire_velocity_3d"] = (
+            df["wide_neighbor_fire_today"].to_numpy()
+            - df["wide_neighbor_fire_lag_3"].to_numpy()
+        )
+
+    if "wide_neighbor_frp_today" in df.columns:
+        for lag in NEIGHBOR_LAGS:
+            df[f"wide_neighbor_frp_lag_{lag}"] = (
+                grp["wide_neighbor_frp_today"].shift(lag).fillna(0)
+            )
+        for w in NEIGHBOR_ROLLS:
+            rolled_wfrp = grp["wide_neighbor_frp_today"].rolling(w, min_periods=1).sum()
+            df[f"wide_neighbor_frp_sum_{w}d"] = rolled_wfrp.reset_index(
                 level=GROUP_KEYS, drop=True
             )
 
@@ -481,7 +518,7 @@ def _build_core_feature_list() -> List[str]:
             f"frp_max_{w}d",
             f"active_days_{w}d",
         ]
-    cols += ["frp_trend_1d", "frp_trend_3d"]
+    cols += ["frp_trend_1d", "frp_trend_3d", "frp_trend_7d", "fire_std_7d"]
     cols += [
         "fire_count_today",
         "frp_sum_today",
@@ -493,6 +530,8 @@ def _build_core_feature_list() -> List[str]:
         "afternoon_fire_count",
         "n_satellites_today",
     ]
+    # Derived ratio / acceleration features
+    cols += ["fire_acceleration", "frp_intensity_7d", "night_fire_ratio"]
     # Spatial neighbour signals (always emitted by add_neighbor_features)
     # Inner ring: 3×3 box minus centre (8 cells)
     cols += ["neighbor_fire_today", "neighbor_frp_today"]
@@ -504,10 +543,12 @@ def _build_core_feature_list() -> List[str]:
     # whether a fire is sweeping toward this cell.
     cols += ["neighbor_fire_velocity_3d", "neighbor_frp_velocity_3d"]
     # Outer ring: 5×5 box minus inner 3×3 (16 cells, regional scale)
-    cols += ["wide_neighbor_fire_today"]
+    cols += ["wide_neighbor_fire_today", "wide_neighbor_frp_today"]
     cols += [f"wide_neighbor_fire_lag_{l}" for l in NEIGHBOR_LAGS]
+    cols += [f"wide_neighbor_frp_lag_{l}" for l in NEIGHBOR_LAGS]
     for w in NEIGHBOR_ROLLS:
-        cols += [f"wide_neighbor_fire_sum_{w}d"]
+        cols += [f"wide_neighbor_fire_sum_{w}d", f"wide_neighbor_frp_sum_{w}d"]
+    cols += ["wide_neighbor_fire_velocity_3d"]
     # Calendar signals
     cols += [
         "month_sin", "month_cos", "doy_sin", "doy_cos",

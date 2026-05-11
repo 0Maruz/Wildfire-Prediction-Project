@@ -17,11 +17,12 @@
   --accent:       #f97316;   /* warm orange — single accent throughout */
   --accent-soft:  rgba(249, 115, 22, 0.12);
 
-  --critical: #ef4444;
-  --high:     #f97316;
-  --medium:   #eab308;
-  --low:      #22c55e;
-  --observed: #f97316;
+  --critical:   #ef4444;
+  --high:       #f97316;
+  --medium:     #eab308;
+  --low:        #22c55e;
+  --observed:   #9333ea;   /* purple */
+  --live-fire:  #06b6d4;   /* cyan — GISTDA NRT VIIRS */
 }
 
 html, body {
@@ -502,6 +503,21 @@ html, body {
   line-height: 1.5;
 }
 
+/* ===== Live-fire status line ===== */
+
+.live-fire-status {
+  margin-top: 6px;
+  padding: 5px 12px;
+  font-size: 11px;
+  border-radius: 4px;
+  font-variant-numeric: tabular-nums;
+  display: none;
+}
+.live-fire-status:not(:empty)    { display: block; }
+.live-fire-status.loading        { color: var(--text-3); }
+.live-fire-status.ok             { color: var(--live-fire); }
+.live-fire-status.error          { color: #f87171; background: rgba(239,68,68,0.08); }
+
 /* ===== Info footer ===== */
 
 .info-footer {
@@ -569,11 +585,12 @@ html, body {
   flex-shrink: 0;
 }
 
-.legend-color.critical { background: var(--critical); }
-.legend-color.high     { background: var(--high); }
-.legend-color.medium   { background: var(--medium); }
-.legend-color.low      { background: var(--low); }
-.legend-color.observed { background: var(--observed); }
+.legend-color.critical  { background: var(--critical); }
+.legend-color.high      { background: var(--high); }
+.legend-color.medium    { background: var(--medium); }
+.legend-color.low       { background: var(--low); }
+.legend-color.observed  { background: var(--observed); }
+.legend-color.live-fire { background: var(--live-fire); }
 
 /* ===== Popup ===== */
 
