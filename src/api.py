@@ -95,6 +95,46 @@ def _resolve_thresholds(meta: dict) -> dict:
     return dict(DEFAULT_URGENCY_THRESHOLDS)
 
 
+# How many days of history to keep resident in RAM. The API's deepest reach
+# back is `_historical_counts` over the last 30 days; a 60-day buffer leaves
+# headroom without paying the multi-GB cost of holding the full 4M-row
+# training frame in memory.
+API_FEATURE_WINDOW_DAYS = int(os.environ.get("API_FEATURE_WINDOW_DAYS", "60"))
+
+
+def _load_features_recent(feature_path: str) -> pd.DataFrame:
+    """Load just the recent slice of the features parquet.
+
+    The training parquet (~4M rows × 80+ cols) blows up to multiple GB when
+    fully materialised as a pandas DataFrame, which OOMs container memory
+    on small Railway plans. We use pyarrow's row-group predicate pushdown
+    to read only rows in the last ``API_FEATURE_WINDOW_DAYS`` days — enough
+    for the latest snapshot + the 30-day historical-count window.
+
+    Falls back to a full read for CSV inputs (no pushdown available there).
+    """
+    if not feature_path.lower().endswith(".parquet"):
+        df = read_table(feature_path)
+        df["date"] = pd.to_datetime(df["date"]).dt.date
+        return df
+
+    import pyarrow.parquet as pq
+    from datetime import date
+
+    # Find the latest date by reading just the date column (cheap — parquet
+    # is column-oriented). Casting to pyarrow.compute would be even cheaper
+    # but pandas → date keeps the code small and works for date32 / string.
+    date_only = pq.read_table(feature_path, columns=["date"]).column("date")
+    latest_ts = pd.to_datetime(date_only.to_pandas()).max()
+    latest: date = latest_ts.date() if hasattr(latest_ts, "date") else latest_ts
+    cutoff = latest - timedelta(days=API_FEATURE_WINDOW_DAYS)
+
+    table = pq.read_table(feature_path, filters=[("date", ">=", cutoff)])
+    df = table.to_pandas()
+    df["date"] = pd.to_datetime(df["date"]).dt.date
+    return df
+
+
 # =====================================
 # LIFESPAN
 # =====================================
@@ -109,8 +149,7 @@ async def lifespan(app: FastAPI):
 
     app.state.model = joblib.load(MODEL_PATH)
 
-    df = read_table(feature_path)
-    df["date"] = pd.to_datetime(df["date"]).dt.date
+    df = _load_features_recent(feature_path)
     app.state.df = df
 
     meta = _load_metadata()
