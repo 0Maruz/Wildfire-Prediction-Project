@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>🔥 Fire Date Prediction Dashboard</title>
+
+  <!-- Leaflet CSS -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css" />
+
+  <!-- Custom CSS -->
+  <link rel="stylesheet" href="style.css?v=8" />
+</head>
+<body>
+
+<!-- Sidebar -->
+<div id="sidebar">
+  <div class="header">
+    <h1>🔥 Fire Date Predictor</h1>
+    <p class="subtitle">NASA FIRMS · real-data wildfire forecasting</p>
+  </div>
+
+  <!-- Date Info -->
+  <div class="info-card">
+    <div class="info-label">Base Date <span class="freshness-badge" id="freshnessBadge"></span></div>
+    <div class="info-value" id="baseDate">Loading...</div>
+    <div class="info-sub" id="freshnessNote"></div>
+    <div class="date-picker-row">
+      <label for="baseDatePicker" class="date-picker-label">View predictions from:</label>
+      <select id="baseDatePicker" class="date-picker"></select>
+    </div>
+    <div class="date-picker-row">
+      <label for="provinceFilter" class="date-picker-label">Filter by province:</label>
+      <select id="provinceFilter" class="date-picker"></select>
+    </div>
+  </div>
+
+  <!-- Day Selector -->
+  <div class="section">
+    <h3>📆 Day Selector</h3>
+    <div class="day-selector" id="daySelector">
+      <button class="day-btn active" data-day="all">All</button>
+      <button class="day-btn" data-day="0">Today</button>
+      <button class="day-btn" data-day="1">+1</button>
+      <button class="day-btn" data-day="2">+2</button>
+      <button class="day-btn" data-day="3">+3</button>
+      <button class="day-btn" data-day="4">+4</button>
+      <button class="day-btn" data-day="5">+5</button>
+      <button class="day-btn" data-day="6">+6</button>
+      <button class="day-btn" data-day="7">+7</button>
+    </div>
+    <div class="day-selector-info" id="daySelectorInfo"></div>
+  </div>
+
+  <!-- Prediction Timeline -->
+  <div class="section">
+    <h3>📅 7-Day Fire Timeline</h3>
+    <div id="timeline"></div>
+  </div>
+
+  <!-- Urgency Summary -->
+  <div class="section">
+    <h3>⚡ Urgency Summary</h3>
+    <div class="urgency-cards">
+      <div class="urgency-card critical">
+        <div class="urgency-label">CRITICAL</div>
+        <div class="urgency-count" id="criticalCount">0</div>
+        <div class="urgency-desc" id="criticalRange">≤ —</div>
+      </div>
+      <div class="urgency-card high">
+        <div class="urgency-label">HIGH</div>
+        <div class="urgency-count" id="highCount">0</div>
+        <div class="urgency-desc" id="highRange">≤ —</div>
+      </div>
+      <div class="urgency-card medium">
+        <div class="urgency-label">MEDIUM</div>
+        <div class="urgency-count" id="mediumCount">0</div>
+        <div class="urgency-desc" id="mediumRange">≤ —</div>
+      </div>
+      <div class="urgency-card low">
+        <div class="urgency-label">LOW</div>
+        <div class="urgency-count" id="lowCount">0</div>
+        <div class="urgency-desc" id="lowRange">≤ —</div>
+      </div>
+    </div>
+    <div class="threshold-note" id="thresholdNote">
+      Thresholds calibrated from real validation predictions.
+    </div>
+  </div>
+
+  <!-- Land Cover Breakdown -->
+  <div class="section">
+    <h3>🌳 Land Cover (Hansen GFC)</h3>
+    <div class="landcover-grid">
+      <div class="landcover-row"><span class="landcover-bar forest"></span><span class="landcover-label">Forest (≥50%)</span><span class="landcover-count" id="lcForest">—</span></div>
+      <div class="landcover-row"><span class="landcover-bar mixed"></span><span class="landcover-label">Mixed (10–50%)</span><span class="landcover-count" id="lcMixed">—</span></div>
+      <div class="landcover-row"><span class="landcover-bar open"></span><span class="landcover-label">Open / Grassland (&lt;10%)</span><span class="landcover-count" id="lcOpen">—</span></div>
+    </div>
+    <div class="landcover-note">
+      Tree cover bucket per cell from Hansen GFC v1.11. Open cells correlate with agricultural-burn signals; forest cells suggest wildfire risk.
+    </div>
+    <button class="export-btn" id="exportCsvBtn">⬇ Export visible cells (CSV)</button>
+  </div>
+
+  <!-- Validation Metrics -->
+  <div class="section">
+    <h3>📊 Validation Metrics</h3>
+    <div class="metrics-grid">
+      <div class="metric"><div class="metric-label">MAE</div><div class="metric-value" id="metricMAE">—</div><div class="metric-unit">days</div></div>
+      <div class="metric"><div class="metric-label">RMSE</div><div class="metric-value" id="metricRMSE">—</div><div class="metric-unit">days</div></div>
+      <div class="metric"><div class="metric-label">R²</div><div class="metric-value" id="metricR2">—</div><div class="metric-unit"></div></div>
+      <div class="metric"><div class="metric-label">±1 day</div><div class="metric-value" id="metricAcc">—</div><div class="metric-unit">acc</div></div>
+    </div>
+    <div class="metrics-note" id="metricsNote">From held-out test split (real time-based).</div>
+  </div>
+
+  <!-- Retrospective hit rate (FIRMS ground truth) -->
+  <div class="section">
+    <h3>🎯 Hit Rate vs FIRMS</h3>
+    <div class="hitrate-card">
+      <div class="hitrate-headline">
+        <span id="hitrateValue">—</span>
+        <span class="hitrate-suffix" id="hitrateSuffix">no past predictions yet</span>
+      </div>
+      <div class="hitrate-detail" id="hitrateDetail">For this snapshot · ±1 day window</div>
+    </div>
+    <div class="metrics-note">
+      Each historical prediction is checked against the actual NASA FIRMS detections within ±1 day of its predicted fire date. "Hit" = the cell did burn near the predicted time.
+    </div>
+  </div>
+
+  <!-- View Options -->
+  <div class="section">
+    <h3>🎨 Display Options</h3>
+
+    <div class="option-group">
+      <label class="toggle-label">
+        <input type="checkbox" id="showObserved">
+        <span>Show Observed Fires (FIRMS)</span>
+      </label>
+    </div>
+
+    <div class="option-group" style="display:none">
+      <label class="toggle-label">
+        <input type="checkbox" id="showPredicted" checked>
+        <span>Show Predictions (smooth heatmap)</span>
+      </label>
+      <div class="slider-group" id="heatRadiusGroup">
+        <label class="slider-label">
+          Smoothing radius
+          <span class="slider-value" id="heatRadiusValue">33 px</span>
+        </label>
+        <input type="range" id="heatRadius" min="15" max="120" step="1" value="33">
+        <div class="slider-hint">
+          Each cell's centre is rendered in its urgency colour at all zoom
+          levels. Larger radius = neighbours blend further.
+        </div>
+      </div>
+    </div>
+
+
+    <div class="option-group" style="display:none">
+      <label class="toggle-label">
+        <input type="checkbox" id="showCellPins" checked>
+        <span>Show Clickable Cell Pins</span>
+      </label>
+    </div>
+
+    <div class="option-group">
+      <label class="toggle-label" style="border-color: rgba(6,182,212,0.25);">
+        <input type="checkbox" id="showLiveFires">
+        <span style="color:#06b6d4;">Live Fires — GISTDA VIIRS (now)</span>
+      </label>
+      <div id="liveFireStatus" class="live-fire-status"></div>
+    </div>
+  </div>
+
+  <!-- Info -->
+  <div class="info-footer">
+    <small>
+      Data sources (real only):<br>
+      • NASA FIRMS VIIRS NRT<br>
+      • Open-Meteo ERA5 (if enabled)<br>
+      No synthetic data is used.
+    </small>
+  </div>
+</div>
+
+<!-- Map -->
+<div id="map"></div>
+
+<!-- Legend -->
+<div class="legend">
+  <div class="legend-title">Fire Urgency</div>
+  <div class="legend-items">
+    <div class="legend-item"><div class="legend-color critical"></div><span>Critical</span></div>
+    <div class="legend-item"><div class="legend-color high"></div><span>High</span></div>
+    <div class="legend-item"><div class="legend-color medium"></div><span>Medium</span></div>
+    <div class="legend-item"><div class="legend-color low"></div><span>Low</span></div>
+    <div class="legend-item"><div class="legend-color observed"></div><span>Observed (FIRMS)</span></div>
+    <div class="legend-item" id="liveFireLegendItem" style="display:none;">
+      <div class="legend-color live-fire"></div><span>Live VIIRS (GISTDA)</span>
+    </div>
+  </div>
+</div>
+
+<!-- Scripts -->
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
+<script src="app.js?v=8"></script>
+</body>
+</html>
