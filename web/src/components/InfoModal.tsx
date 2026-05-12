@@ -162,6 +162,47 @@ export default function InfoModal(props: Props) {
           )}
 
           <section>
+            <h3>Glossary — what these numbers mean</h3>
+            <dl className="info-dl">
+              <dt>±1 day accuracy</dt>
+              <dd>The share of test-set rows where the model's predicted fire date landed within ±1 day of the real fire date. The single most operator-meaningful number: <b>higher = better</b>. 50% means about half the predictions are practically correct.</dd>
+
+              <dt>MAE (mean absolute error, days)</dt>
+              <dd>Average distance between predicted and real fire dates, in days. <b>Lower = better</b>. MAE = 1.5 means predictions are off by 1½ days on average. Robust to outliers.</dd>
+
+              <dt>RMSE (root mean squared error, days)</dt>
+              <dd>Like MAE but squares the errors before averaging, so big misses count more. <b>Lower = better</b>. If RMSE is much higher than MAE, a few large errors dominate the picture.</dd>
+
+              <dt>R² (coefficient of determination)</dt>
+              <dd>How much variance in the real fire dates the model explains. <b>0 = no better than predicting the mean, 1 = perfect, negative = worse than predicting the mean</b>. Wildfire date is inherently noisy, so even R² ≈ 0.3 is useful.</dd>
+
+              <dt>Skill check</dt>
+              <dd>"Passed" means the model beats the predict-mean baseline by ≥5% on test MAE. "Failed" means the model is barely better than guessing the average — investigate before trusting predictions.</dd>
+
+              <dt>Validation MAE vs Test MAE</dt>
+              <dd>Validation is the slice used during hyperparameter tuning; test is the held-out final 20% the model has never seen. If validation is dramatically worse than test, the validation window was unusually hard (often: off-peak fire season).</dd>
+
+              <dt>Urgency tiers (CRITICAL / HIGH / MEDIUM / LOW)</dt>
+              <dd>Buckets of <code>days_until_fire</code>: CRITICAL = fire today, HIGH ≤ 2 days, MEDIUM ≤ 4 days, LOW ≤ 7 days. Used for at-a-glance prioritisation; thresholds are listed under "Urgency distribution" above.</dd>
+
+              <dt>days_until_fire (the model's actual output)</dt>
+              <dd>An integer 0–7 returned per grid cell — "the model thinks this cell will burn N days from the base date". 0 = today, 7 = end of the prediction horizon.</dd>
+
+              <dt>raw_prediction</dt>
+              <dd>The continuous version of <code>days_until_fire</code> before flooring to an integer. Floor (not round) is used so a value of 0.96 lands on day 0 ("within 24h"), matching how operators read the bucket label.</dd>
+
+              <dt>Confidence (rounding proxy)</dt>
+              <dd>How close the raw prediction landed to the centre of its day-bucket: 1.0 = dead-centre, 0 = at the edge. <b>Not a calibrated probability</b> — don't read 0.80 as "80% chance the fire happens".</dd>
+
+              <dt>Historical fires (last 30 days, FIRMS)</dt>
+              <dd>Literal count of NASA FIRMS hotspot detections in the cell over the last 30 days. Used as a sanity-check: a CRITICAL prediction in a cell with 0 recent fires deserves scepticism.</dd>
+
+              <dt>Hit rate vs FIRMS</dt>
+              <dd>For each historical prediction, did the predicted cell actually burn within ±1 day of the predicted date? Higher = the dashboard is calling real events, not noise.</dd>
+            </dl>
+          </section>
+
+          <section>
             <h3>Data sources</h3>
             <ul className="info-list">
               <li><b>NASA FIRMS VIIRS NRT</b> — hotspot detections + FRP / brightness, used for training labels and historical aggregates.</li>

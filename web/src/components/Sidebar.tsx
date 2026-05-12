@@ -227,8 +227,14 @@ export default function Sidebar(p: SidebarProps) {
           {(["critical", "high", "medium", "low"] as const).map((tier) => {
             const key = tier.toUpperCase() as UrgencyLevel;
             const upper = key as keyof UrgencyThresholds;
+            const tip = {
+              critical: "Fire predicted within 24 hours of the base date. Triage first.",
+              high: "Fire predicted within ~2 days. Watch closely.",
+              medium: "Fire predicted within ~4 days. Plan ahead.",
+              low: "Fire predicted within the full 7-day horizon. Background risk.",
+            }[tier];
             return (
-              <div key={tier} className={`urgency-card ${tier}`}>
+              <div key={tier} className={`urgency-card ${tier}`} title={tip}>
                 <div className="urgency-label">{tier.toUpperCase()}</div>
                 <div className="urgency-count">{urgencyCounts[key]}</div>
                 <div className="urgency-desc">
@@ -347,7 +353,10 @@ function HitRate({
   return (
     <div className="section">
       <h3>🎯 Hit Rate vs FIRMS</h3>
-      <div className="hitrate-card">
+      <div
+        className="hitrate-card"
+        title="Out of the predicted cells whose target date has passed, what fraction actually burned within ±1 day of when the model said. Live measurement of dashboard skill on real ground truth."
+      >
         <div className="hitrate-headline">
           <span id="hitrateValue">{value}</span>
           <span className="hitrate-suffix">{suffix}</span>

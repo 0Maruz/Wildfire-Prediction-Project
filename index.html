@@ -215,6 +215,29 @@
       font-family: 'SF Mono', Menlo, Consolas, monospace;
     }
 
+    /* ── Glossary list ─────────────────────────────────────────── */
+    .glossary {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+    .glossary dt {
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--text);
+      letter-spacing: -0.005em;
+    }
+    .glossary dd {
+      margin-top: 4px;
+      font-size: 13px;
+      color: var(--text-2);
+      line-height: 1.6;
+      padding-left: 14px;
+      border-left: 2px solid var(--surface-2);
+    }
+    .glossary dd b { color: var(--text); font-weight: 600; }
+    .glossary dd code { font-size: 12px; padding: 1px 5px; }
+
     /* ── Footer disclaimer ──────────────────────────────────────── */
     .disclaimer {
       margin-top: 36px;
@@ -306,6 +329,38 @@
     <div class="section">
       <h2>What this is</h2>
       <p>A tree-ensemble regressor predicts <code>days_until_fire</code> (0–7) per 0.1° grid cell across Thailand. Predictions are bucketed into urgency tiers (CRITICAL / HIGH / MEDIUM / LOW) and rendered on a Leaflet map. The held-out test split — the final 20% of data the model never saw during training or selection — is what the accuracy numbers above are measured against.</p>
+    </div>
+
+    <div class="section">
+      <h2>What the numbers above mean</h2>
+      <dl class="glossary">
+        <dt>±1 day accuracy</dt>
+        <dd>Share of test-set predictions where the model's predicted fire date fell within <b>±1 day</b> of the real fire date. Higher = better. 50% means about half the predictions are practically useful.</dd>
+
+        <dt>MAE — mean absolute error (days)</dt>
+        <dd>Average distance, in days, between the predicted and the real fire date. Lower = better. MAE of 1.5 means typical predictions are off by 1½ days.</dd>
+
+        <dt>RMSE — root mean squared error (days)</dt>
+        <dd>Like MAE but squares errors before averaging, so a few big misses count more than many small ones. Lower = better.</dd>
+
+        <dt>R² — coefficient of determination</dt>
+        <dd>How much variance in real fire dates the model explains. <b>0 = no better than guessing the mean, 1 = perfect, negative = worse than the mean</b>. Wildfire date is noisy, so even R² ≈ 0.3 is useful.</dd>
+
+        <dt>Best model</dt>
+        <dd>Either <code>lightgbm</code> or <code>xgboost</code>, picked by lowest validation MAE. RandomForest is included in the candidate pool but consistently loses on this dataset.</dd>
+
+        <dt>Skill check</dt>
+        <dd>"Passed" = the model beats the predict-mean baseline by ≥5% on test MAE. "Failed" = the model is barely better than guessing the average — investigate before trusting predictions.</dd>
+
+        <dt>Validation MAE</dt>
+        <dd>Used during hyperparameter tuning only. If it's much worse than the test MAE, the validation period was unusually hard (often: off-peak season).</dd>
+
+        <dt>Urgency tiers</dt>
+        <dd>Buckets of <code>days_until_fire</code>: <b>CRITICAL</b> = today, <b>HIGH</b> ≤ 2d, <b>MEDIUM</b> ≤ 4d, <b>LOW</b> ≤ 7d. Used by the dashboard for at-a-glance triage.</dd>
+
+        <dt>Predicted cells today</dt>
+        <dd>How many 0.1° grid cells the latest run flagged for the next 7 days. Capped at 100 per day so the dashboard stays at operational scale.</dd>
+      </dl>
     </div>
 
     <div class="section">
