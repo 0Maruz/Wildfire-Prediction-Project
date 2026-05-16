@@ -48,20 +48,48 @@ export default function MapView(props: MapViewProps) {
     livefire: null,
   });
 
+  // Theme-aware tile layer — swaps the basemap when the user toggles light/dark
+  // mode (ThemeToggle sets <html data-theme="light">). Kept as a ref so we can
+  // remove/add it cleanly without recreating the whole map.
+  const tileLayerRef = useRef<L.TileLayer | null>(null);
+
+  const tileUrlFor = (theme: "light" | "dark") =>
+    theme === "light"
+      ? "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png"
+      : "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png";
+
+  const currentTheme = (): "light" | "dark" =>
+    document.documentElement.getAttribute("data-theme") === "light" ? "light" : "dark";
+
   // One-time map init.
   useEffect(() => {
     if (mapRef.current || !containerRef.current) return;
     const map = L.map(containerRef.current, { center: [15.0, 101.0], zoom: 6 });
-    L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", {
-      attribution: "&copy; OpenStreetMap contributors",
+    tileLayerRef.current = L.tileLayer(tileUrlFor(currentTheme()), {
+      attribution: "&copy; OpenStreetMap contributors &copy; CARTO",
     }).addTo(map);
 
     map.on("zoomend", () => reclampAllMarkers(layersRef.current, map));
     mapRef.current = map;
 
+    // Watch for theme changes from ThemeToggle and swap tiles live.
+    const observer = new MutationObserver(() => {
+      if (!mapRef.current || !tileLayerRef.current) return;
+      mapRef.current.removeLayer(tileLayerRef.current);
+      tileLayerRef.current = L.tileLayer(tileUrlFor(currentTheme()), {
+        attribution: "&copy; OpenStreetMap contributors &copy; CARTO",
+      }).addTo(mapRef.current);
+    });
+    observer.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ["data-theme"],
+    });
+
     return () => {
+      observer.disconnect();
       map.remove();
       mapRef.current = null;
+      tileLayerRef.current = null;
     };
   }, []);
 

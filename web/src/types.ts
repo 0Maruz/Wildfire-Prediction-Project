@@ -68,6 +68,7 @@ export interface ValidationMetrics {
   stability_auc_min?: number;
   stability_auc_max?: number;
   rolling_by_month?: RollingMonthPoint[];
+  feature_importance_top?: { feature: string; importance: number }[];
 }
 
 export interface RollingMonthPoint {
@@ -136,6 +137,42 @@ export interface FireGeoJson {
   features: FireFeature[];
   metadata?: GeoJsonMetadata;
 }
+
+// ───────────── Notify / Alert Dispatch ─────────────
+
+export type NotifyChannel = "sms" | "line" | "email" | "all";
+export type NotifyPriority = "normal" | "urgent" | "emergency";
+
+export interface NotifyRequest {
+  channel: NotifyChannel;
+  recipients: string[];
+  message: string;
+  zone_ids: string[];
+  priority: NotifyPriority;
+  template?: string;
+}
+
+export interface NotifyResponse {
+  status: "queued";
+  id: string;
+  timestamp: string;
+}
+
+export interface NotifyLogRecord {
+  id: string;
+  timestamp: string;
+  channel: NotifyChannel;
+  recipients_count: number;
+  recipients_preview: string[];
+  zone_ids_count: number;
+  zone_ids_preview: string[];
+  priority: NotifyPriority;
+  template: string | null;
+  message_preview: string;
+  status: "queued" | "sent" | "failed";
+}
+
+export type AlertPageRoute = "dashboard" | "notify" | "reports";
 
 export type DaySelection = "all" | "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7";
 

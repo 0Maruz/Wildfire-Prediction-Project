@@ -698,6 +698,11 @@ def run():
     predicted, base_date, thresholds = build_predicted(df, model, obs_date, meta)
 
     metrics = (meta.get("model") or {}).get("test_metrics", {}) or {}
+    # Include feature_importance_top (lives at the root of dataset_info.json)
+    # in the GeoJSON-side metrics so the Reports page can render it without
+    # a second fetch.
+    if "feature_importance_top" in meta:
+        metrics["feature_importance_top"] = meta["feature_importance_top"][:20]
     # Pass the densified daily frame so append_geojson can revalidate every
     # predicted feature against actual FIRMS observations and tag it
     # hit / miss / future. Empowers the dashboard's "did it actually burn?"

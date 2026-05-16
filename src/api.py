@@ -14,9 +14,12 @@
 
 import json
 import os
+import uuid
+from collections import deque
 from contextlib import asynccontextmanager
-from datetime import datetime, timedelta
-from typing import Optional
+from datetime import datetime, timedelta, timezone
+from threading import Lock
+from typing import List, Literal, Optional
 
 import joblib
 import numpy as np
@@ -26,6 +29,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, Field
 
 from features import (
     DEFAULT_URGENCY_THRESHOLDS,
@@ -589,6 +593,68 @@ def predict_location(
 
 # =====================================
 # STATIC SPA SERVING
+# =====================================
+# /api/notify — operator alert-dispatch stub
+# =====================================
+#
+# Production stub: receives operator alert payloads and writes them to an
+# in-memory ring buffer (deque, last 100 records). Does not deliver SMS /
+# LINE / Email — real delivery requires a per-channel provider integration
+# (LINE Messaging API, Twilio, SendGrid, etc.) and per-recipient consent.
+# Operators on the /web/ Notify page see immediate "queued" confirmation;
+# the entry shows in the call log below.
+#
+# Thread-safety: a Lock guards both list mutation and snapshot reads so the
+# log endpoint never sees a half-formed record under FastAPI's threadpool.
+_NOTIFY_LOG: "deque[dict]" = deque(maxlen=100)
+_NOTIFY_LOG_LOCK = Lock()
+
+_VALID_CHANNELS = {"sms", "line", "email", "all"}
+_VALID_PRIORITIES = {"normal", "urgent", "emergency"}
+
+
+class NotifyRequest(BaseModel):
+    """Payload from /web/ Notify page when an operator dispatches an alert."""
+    channel: Literal["sms", "line", "email", "all"]
+    recipients: List[str] = Field(..., min_length=1, max_length=500)
+    message: str = Field(..., min_length=1, max_length=2000)
+    zone_ids: List[str] = Field(default_factory=list, max_length=500)
+    priority: Literal["normal", "urgent", "emergency"] = "normal"
+    template: Optional[str] = None
+
+
+@app.post("/api/notify")
+def post_notify(payload: NotifyRequest):
+    """Queue an alert. Stub — logs to ring buffer, does not deliver."""
+    record = {
+        "id": str(uuid.uuid4()),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "channel": payload.channel,
+        "recipients_count": len(payload.recipients),
+        "recipients_preview": payload.recipients[:3],
+        "zone_ids_count": len(payload.zone_ids),
+        "zone_ids_preview": payload.zone_ids[:5],
+        "priority": payload.priority,
+        "template": payload.template,
+        "message_preview": payload.message[:160],
+        "status": "queued",
+    }
+    with _NOTIFY_LOG_LOCK:
+        _NOTIFY_LOG.appendleft(record)
+    return {"status": "queued", "id": record["id"], "timestamp": record["timestamp"]}
+
+
+@app.get("/api/notify/log")
+def get_notify_log(limit: int = 100):
+    """Return the most-recent notify dispatches (newest first)."""
+    limit = max(1, min(limit, 100))
+    with _NOTIFY_LOG_LOCK:
+        snapshot = list(_NOTIFY_LOG)[:limit]
+    return {"count": len(snapshot), "records": snapshot}
+
+
+# =====================================
+# Static SPA serving (Vite build output)
 # =====================================
 #
 # The Vite-built React dashboard is served from the same FastAPI app. All
