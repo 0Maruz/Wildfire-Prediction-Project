@@ -383,9 +383,29 @@ def health(request: Request):
     }
 
 
+def _json_sanitize(obj):
+    """Recursively replace inf/nan floats with None.
+
+    FastAPI's default JSON encoder uses Python's json with allow_nan=False
+    (RFC 8259 compliance), so any inf/nan in the payload raises 500. sklearn's
+    roc_curve returns thresholds[0]=inf, scientific_stats writes that into
+    GeoJSON metadata, and one stray value bricks the whole response. This
+    sanitizer is the belt-and-suspenders safety net.
+    """
+    import math
+    if isinstance(obj, dict):
+        return {k: _json_sanitize(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_json_sanitize(v) for v in obj]
+    if isinstance(obj, float):
+        if math.isinf(obj) or math.isnan(obj):
+            return None
+    return obj
+
+
 @app.get("/metadata")
 def metadata():
-    return _load_metadata()
+    return _json_sanitize(_load_metadata())
 
 
 @app.get("/metrics")
@@ -393,14 +413,14 @@ def metrics(request: Request):
     """Real held-out validation/test metrics from train.py."""
     meta = request.app.state.meta or {}
     model_block = meta.get("model", {}) or {}
-    return {
+    return _json_sanitize({
         "best_model": meta.get("best_model"),
         "val_metrics": model_block.get("val_metrics", {}),
         "test_metrics": model_block.get("test_metrics", {}),
         "urgency_thresholds": request.app.state.thresholds,
         "feature_count": len(request.app.state.features),
         "weather_active": any(c in request.app.state.features for c in FEATURES_WEATHER),
-    }
+    })
 
 
 @app.get("/predictions/today")
@@ -520,7 +540,8 @@ def get_geojson():
     if not os.path.exists(GEOJSON_PATH):
         raise HTTPException(status_code=404, detail="GeoJSON not generated yet. Run risk_map.py.")
     with open(GEOJSON_PATH, "r", encoding="utf-8") as f:
-        return json.load(f)
+        data = json.load(f)
+    return _json_sanitize(data)
 
 
 @app.get("/predict/location")

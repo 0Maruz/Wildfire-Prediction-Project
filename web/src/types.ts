@@ -69,6 +69,69 @@ export interface ValidationMetrics {
   stability_auc_max?: number;
   rolling_by_month?: RollingMonthPoint[];
   feature_importance_top?: { feature: string; importance: number }[];
+  // ── Scientific statistics (from scripts/scientific_stats.py) ──
+  scientific_stats?: ScientificStats;
+}
+
+export interface BootstrapCI {
+  point: number;
+  lower: number;
+  upper: number;
+  std: number;
+  n_boot: number;
+  confidence: number;
+}
+
+export interface ScientificStats {
+  samples: {
+    total_densified: number;
+    train: SampleSplit;
+    val: SampleSplit;
+    test: SampleSplit;
+  };
+  ci_95: {
+    roc_auc: BootstrapCI;
+    average_precision: BootstrapCI;
+    f1_at_deploy: BootstrapCI;
+    precision_at_deploy: BootstrapCI;
+    recall_at_deploy: BootstrapCI;
+    brier_score: BootstrapCI;
+  };
+  confusion_matrix: {
+    tn: number; fp: number; fn: number; tp: number;
+    matrix: number[][];
+    row_labels: string[];
+    col_labels: string[];
+  };
+  classification_stats: {
+    sensitivity: number;
+    specificity: number;
+    ppv: number;
+    npv: number;
+    false_positive_rate: number;
+    false_negative_rate: number;
+    cohen_kappa: number;
+    matthews_corr_coef: number;
+    log_loss: number;
+    brier_score: number;
+    brier_skill_score: number;
+    baseline_class_prior: number;
+  };
+  roc_curve: CurvePoint[];
+  pr_curve: CurvePoint[];
+}
+
+export interface SampleSplit {
+  n: number;
+  positives: number;
+  positive_rate: number;
+  date_range: [string, string];
+}
+
+export interface CurvePoint {
+  x: number;
+  y: number;
+  t: number;  // threshold at this point
 }
 
 export interface RollingMonthPoint {

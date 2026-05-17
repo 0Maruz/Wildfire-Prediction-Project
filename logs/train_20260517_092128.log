@@ -1,0 +1,191 @@
+2026-05-17 09:21:29,419 | INFO | train | ==== STEP 1: load + grid raw FIRMS data ====
+2026-05-17 09:21:29,419 | INFO | data_loader | Loading 6 FIRMS file(s)
+2026-05-17 09:21:29,526 | INFO | data_loader | Loaded 451844 raw hotspot rows
+2026-05-17 09:21:30,143 | INFO | data_loader | Capped FRP at q0.999=202.6, dropped 452 rows
+2026-05-17 09:21:30,152 | INFO | data_loader | After cleaning: 451392 rows
+2026-05-17 09:21:30,623 | INFO | data_loader | Urban filter (buffer=0.0 km): dropped 383 / 451392 hotspots
+2026-05-17 09:21:30,771 | INFO | data_loader | Aggregated to 110983 cell-day rows across 9495 cells
+2026-05-17 09:21:33,204 | INFO | data_loader | Densified 9495 active cells × 471 days = 4472145 rows
+2026-05-17 09:21:34,747 | INFO | data_loader | Merged Hansen tree cover: 4472145 / 4472145 rows have tree_cover values
+2026-05-17 09:21:37,265 | INFO | data_loader | Merged weather: 2153386 / 4472145 rows have real ERA5 values
+2026-05-17 09:21:37,531 | INFO | train | ==== STEP 2: feature engineering ====
+/home/qomaru/Science-Project-version-3/src/features.py:328: PerformanceWarning: DataFrame is highly fragmented.  This is usually the result of calling `frame.insert` many times, which has poor performance.  Consider joining all columns at once using pd.concat(axis=1) instead. To get a de-fragmented frame, use `newframe = frame.copy()`
+  df[f"wide_neighbor_fire_sum_{w}d"] = _past_roll(df, "wide_neighbor_fire_today", w, "sum")   # CAUSAL
+/home/qomaru/Science-Project-version-3/src/features.py:329: PerformanceWarning: DataFrame is highly fragmented.  This is usually the result of calling `frame.insert` many times, which has poor performance.  Consider joining all columns at once using pd.concat(axis=1) instead. To get a de-fragmented frame, use `newframe = frame.copy()`
+  df["wide_neighbor_fire_velocity_3d"] = (
+/home/qomaru/Science-Project-version-3/src/features.py:335: PerformanceWarning: DataFrame is highly fragmented.  This is usually the result of calling `frame.insert` many times, which has poor performance.  Consider joining all columns at once using pd.concat(axis=1) instead. To get a de-fragmented frame, use `newframe = frame.copy()`
+  df[f"wide_neighbor_frp_lag_{lag}"] = grp["wide_neighbor_frp_today"].shift(lag).fillna(0)  # CAUSAL
+/home/qomaru/Science-Project-version-3/src/features.py:335: PerformanceWarning: DataFrame is highly fragmented.  This is usually the result of calling `frame.insert` many times, which has poor performance.  Consider joining all columns at once using pd.concat(axis=1) instead. To get a de-fragmented frame, use `newframe = frame.copy()`
+  df[f"wide_neighbor_frp_lag_{lag}"] = grp["wide_neighbor_frp_today"].shift(lag).fillna(0)  # CAUSAL
+/home/qomaru/Science-Project-version-3/src/features.py:335: PerformanceWarning: DataFrame is highly fragmented.  This is usually the result of calling `frame.insert` many times, which has poor performance.  Consider joining all columns at once using pd.concat(axis=1) instead. To get a de-fragmented frame, use `newframe = frame.copy()`
+  df[f"wide_neighbor_frp_lag_{lag}"] = grp["wide_neighbor_frp_today"].shift(lag).fillna(0)  # CAUSAL
+/home/qomaru/Science-Project-version-3/src/features.py:335: PerformanceWarning: DataFrame is highly fragmented.  This is usually the result of calling `frame.insert` many times, which has poor performance.  Consider joining all columns at once using pd.concat(axis=1) instead. To get a de-fragmented frame, use `newframe = frame.copy()`
+  df[f"wide_neighbor_frp_lag_{lag}"] = grp["wide_neighbor_frp_today"].shift(lag).fillna(0)  # CAUSAL
+/home/qomaru/Science-Project-version-3/src/features.py:335: PerformanceWarning: DataFrame is highly fragmented.  This is usually the result of calling `frame.insert` many times, which has poor performance.  Consider joining all columns at once using pd.concat(axis=1) instead. To get a de-fragmented frame, use `newframe = frame.copy()`
+  df[f"wide_neighbor_frp_lag_{lag}"] = grp["wide_neighbor_frp_today"].shift(lag).fillna(0)  # CAUSAL
+/home/qomaru/Science-Project-version-3/src/features.py:337: PerformanceWarning: DataFrame is highly fragmented.  This is usually the result of calling `frame.insert` many times, which has poor performance.  Consider joining all columns at once using pd.concat(axis=1) instead. To get a de-fragmented frame, use `newframe = frame.copy()`
+  df[f"wide_neighbor_frp_sum_{w}d"] = _past_roll(df, "wide_neighbor_frp_today", w, "sum")    # CAUSAL
+/home/qomaru/Science-Project-version-3/src/features.py:337: PerformanceWarning: DataFrame is highly fragmented.  This is usually the result of calling `frame.insert` many times, which has poor performance.  Consider joining all columns at once using pd.concat(axis=1) instead. To get a de-fragmented frame, use `newframe = frame.copy()`
+  df[f"wide_neighbor_frp_sum_{w}d"] = _past_roll(df, "wide_neighbor_frp_today", w, "sum")    # CAUSAL
+/home/qomaru/Science-Project-version-3/src/features.py:337: PerformanceWarning: DataFrame is highly fragmented.  This is usually the result of calling `frame.insert` many times, which has poor performance.  Consider joining all columns at once using pd.concat(axis=1) instead. To get a de-fragmented frame, use `newframe = frame.copy()`
+  df[f"wide_neighbor_frp_sum_{w}d"] = _past_roll(df, "wide_neighbor_frp_today", w, "sum")    # CAUSAL
+/home/qomaru/Science-Project-version-3/src/features.py:337: PerformanceWarning: DataFrame is highly fragmented.  This is usually the result of calling `frame.insert` many times, which has poor performance.  Consider joining all columns at once using pd.concat(axis=1) instead. To get a de-fragmented frame, use `newframe = frame.copy()`
+  df[f"wide_neighbor_frp_sum_{w}d"] = _past_roll(df, "wide_neighbor_frp_today", w, "sum")    # CAUSAL
+/home/qomaru/Science-Project-version-3/src/features.py:343: PerformanceWarning: DataFrame is highly fragmented.  This is usually the result of calling `frame.insert` many times, which has poor performance.  Consider joining all columns at once using pd.concat(axis=1) instead. To get a de-fragmented frame, use `newframe = frame.copy()`
+  df[f"{col}_today"] = df[col].fillna(0)
+/home/qomaru/Science-Project-version-3/src/features.py:345: PerformanceWarning: DataFrame is highly fragmented.  This is usually the result of calling `frame.insert` many times, which has poor performance.  Consider joining all columns at once using pd.concat(axis=1) instead. To get a de-fragmented frame, use `newframe = frame.copy()`
+  df[f"{col}_lag_{lag}"] = grp[col].shift(lag).fillna(0)         # CAUSAL
+/home/qomaru/Science-Project-version-3/src/features.py:345: PerformanceWarning: DataFrame is highly fragmented.  This is usually the result of calling `frame.insert` many times, which has poor performance.  Consider joining all columns at once using pd.concat(axis=1) instead. To get a de-fragmented frame, use `newframe = frame.copy()`
+  df[f"{col}_lag_{lag}"] = grp[col].shift(lag).fillna(0)         # CAUSAL
+/home/qomaru/Science-Project-version-3/src/features.py:345: PerformanceWarning: DataFrame is highly fragmented.  This is usually the result of calling `frame.insert` many times, which has poor performance.  Consider joining all columns at once using pd.concat(axis=1) instead. To get a de-fragmented frame, use `newframe = frame.copy()`
+  df[f"{col}_lag_{lag}"] = grp[col].shift(lag).fillna(0)         # CAUSAL
+/home/qomaru/Science-Project-version-3/src/features.py:347: PerformanceWarning: DataFrame is highly fragmented.  This is usually the result of calling `frame.insert` many times, which has poor performance.  Consider joining all columns at once using pd.concat(axis=1) instead. To get a de-fragmented frame, use `newframe = frame.copy()`
+  df[f"{col}_mean_{w}d"] = _past_roll(df, col, w, "mean")        # CAUSAL
+/home/qomaru/Science-Project-version-3/src/features.py:347: PerformanceWarning: DataFrame is highly fragmented.  This is usually the result of calling `frame.insert` many times, which has poor performance.  Consider joining all columns at once using pd.concat(axis=1) instead. To get a de-fragmented frame, use `newframe = frame.copy()`
+  df[f"{col}_mean_{w}d"] = _past_roll(df, col, w, "mean")        # CAUSAL
+/home/qomaru/Science-Project-version-3/src/features.py:343: PerformanceWarning: DataFrame is highly fragmented.  This is usually the result of calling `frame.insert` many times, which has poor performance.  Consider joining all columns at once using pd.concat(axis=1) instead. To get a de-fragmented frame, use `newframe = frame.copy()`
+  df[f"{col}_today"] = df[col].fillna(0)
+/home/qomaru/Science-Project-version-3/src/features.py:345: PerformanceWarning: DataFrame is highly fragmented.  This is usually the result of calling `frame.insert` many times, which has poor performance.  Consider joining all columns at once using pd.concat(axis=1) instead. To get a de-fragmented frame, use `newframe = frame.copy()`
+  df[f"{col}_lag_{lag}"] = grp[col].shift(lag).fillna(0)         # CAUSAL
+/home/qomaru/Science-Project-version-3/src/features.py:345: PerformanceWarning: DataFrame is highly fragmented.  This is usually the result of calling `frame.insert` many times, which has poor performance.  Consider joining all columns at once using pd.concat(axis=1) instead. To get a de-fragmented frame, use `newframe = frame.copy()`
+  df[f"{col}_lag_{lag}"] = grp[col].shift(lag).fillna(0)         # CAUSAL
+/home/qomaru/Science-Project-version-3/src/features.py:345: PerformanceWarning: DataFrame is highly fragmented.  This is usually the result of calling `frame.insert` many times, which has poor performance.  Consider joining all columns at once using pd.concat(axis=1) instead. To get a de-fragmented frame, use `newframe = frame.copy()`
+  df[f"{col}_lag_{lag}"] = grp[col].shift(lag).fillna(0)         # CAUSAL
+/home/qomaru/Science-Project-version-3/src/features.py:347: PerformanceWarning: DataFrame is highly fragmented.  This is usually the result of calling `frame.insert` many times, which has poor performance.  Consider joining all columns at once using pd.concat(axis=1) instead. To get a de-fragmented frame, use `newframe = frame.copy()`
+  df[f"{col}_mean_{w}d"] = _past_roll(df, col, w, "mean")        # CAUSAL
+/home/qomaru/Science-Project-version-3/src/features.py:347: PerformanceWarning: DataFrame is highly fragmented.  This is usually the result of calling `frame.insert` many times, which has poor performance.  Consider joining all columns at once using pd.concat(axis=1) instead. To get a de-fragmented frame, use `newframe = frame.copy()`
+  df[f"{col}_mean_{w}d"] = _past_roll(df, col, w, "mean")        # CAUSAL
+/home/qomaru/Science-Project-version-3/src/features.py:343: PerformanceWarning: DataFrame is highly fragmented.  This is usually the result of calling `frame.insert` many times, which has poor performance.  Consider joining all columns at once using pd.concat(axis=1) instead. To get a de-fragmented frame, use `newframe = frame.copy()`
+  df[f"{col}_today"] = df[col].fillna(0)
+/home/qomaru/Science-Project-version-3/src/features.py:345: PerformanceWarning: DataFrame is highly fragmented.  This is usually the result of calling `frame.insert` many times, which has poor performance.  Consider joining all columns at once using pd.concat(axis=1) instead. To get a de-fragmented frame, use `newframe = frame.copy()`
+  df[f"{col}_lag_{lag}"] = grp[col].shift(lag).fillna(0)         # CAUSAL
+/home/qomaru/Science-Project-version-3/src/features.py:345: PerformanceWarning: DataFrame is highly fragmented.  This is usually the result of calling `frame.insert` many times, which has poor performance.  Consider joining all columns at once using pd.concat(axis=1) instead. To get a de-fragmented frame, use `newframe = frame.copy()`
+  df[f"{col}_lag_{lag}"] = grp[col].shift(lag).fillna(0)         # CAUSAL
+/home/qomaru/Science-Project-version-3/src/features.py:345: PerformanceWarning: DataFrame is highly fragmented.  This is usually the result of calling `frame.insert` many times, which has poor performance.  Consider joining all columns at once using pd.concat(axis=1) instead. To get a de-fragmented frame, use `newframe = frame.copy()`
+  df[f"{col}_lag_{lag}"] = grp[col].shift(lag).fillna(0)         # CAUSAL
+/home/qomaru/Science-Project-version-3/src/features.py:347: PerformanceWarning: DataFrame is highly fragmented.  This is usually the result of calling `frame.insert` many times, which has poor performance.  Consider joining all columns at once using pd.concat(axis=1) instead. To get a de-fragmented frame, use `newframe = frame.copy()`
+  df[f"{col}_mean_{w}d"] = _past_roll(df, col, w, "mean")        # CAUSAL
+/home/qomaru/Science-Project-version-3/src/features.py:347: PerformanceWarning: DataFrame is highly fragmented.  This is usually the result of calling `frame.insert` many times, which has poor performance.  Consider joining all columns at once using pd.concat(axis=1) instead. To get a de-fragmented frame, use `newframe = frame.copy()`
+  df[f"{col}_mean_{w}d"] = _past_roll(df, col, w, "mean")        # CAUSAL
+/home/qomaru/Science-Project-version-3/src/features.py:343: PerformanceWarning: DataFrame is highly fragmented.  This is usually the result of calling `frame.insert` many times, which has poor performance.  Consider joining all columns at once using pd.concat(axis=1) instead. To get a de-fragmented frame, use `newframe = frame.copy()`
+  df[f"{col}_today"] = df[col].fillna(0)
+/home/qomaru/Science-Project-version-3/src/features.py:345: PerformanceWarning: DataFrame is highly fragmented.  This is usually the result of calling `frame.insert` many times, which has poor performance.  Consider joining all columns at once using pd.concat(axis=1) instead. To get a de-fragmented frame, use `newframe = frame.copy()`
+  df[f"{col}_lag_{lag}"] = grp[col].shift(lag).fillna(0)         # CAUSAL
+/home/qomaru/Science-Project-version-3/src/features.py:345: PerformanceWarning: DataFrame is highly fragmented.  This is usually the result of calling `frame.insert` many times, which has poor performance.  Consider joining all columns at once using pd.concat(axis=1) instead. To get a de-fragmented frame, use `newframe = frame.copy()`
+  df[f"{col}_lag_{lag}"] = grp[col].shift(lag).fillna(0)         # CAUSAL
+/home/qomaru/Science-Project-version-3/src/features.py:345: PerformanceWarning: DataFrame is highly fragmented.  This is usually the result of calling `frame.insert` many times, which has poor performance.  Consider joining all columns at once using pd.concat(axis=1) instead. To get a de-fragmented frame, use `newframe = frame.copy()`
+  df[f"{col}_lag_{lag}"] = grp[col].shift(lag).fillna(0)         # CAUSAL
+/home/qomaru/Science-Project-version-3/src/features.py:347: PerformanceWarning: DataFrame is highly fragmented.  This is usually the result of calling `frame.insert` many times, which has poor performance.  Consider joining all columns at once using pd.concat(axis=1) instead. To get a de-fragmented frame, use `newframe = frame.copy()`
+  df[f"{col}_mean_{w}d"] = _past_roll(df, col, w, "mean")        # CAUSAL
+/home/qomaru/Science-Project-version-3/src/features.py:347: PerformanceWarning: DataFrame is highly fragmented.  This is usually the result of calling `frame.insert` many times, which has poor performance.  Consider joining all columns at once using pd.concat(axis=1) instead. To get a de-fragmented frame, use `newframe = frame.copy()`
+  df[f"{col}_mean_{w}d"] = _past_roll(df, col, w, "mean")        # CAUSAL
+/home/qomaru/Science-Project-version-3/src/features.py:343: PerformanceWarning: DataFrame is highly fragmented.  This is usually the result of calling `frame.insert` many times, which has poor performance.  Consider joining all columns at once using pd.concat(axis=1) instead. To get a de-fragmented frame, use `newframe = frame.copy()`
+  df[f"{col}_today"] = df[col].fillna(0)
+/home/qomaru/Science-Project-version-3/src/features.py:345: PerformanceWarning: DataFrame is highly fragmented.  This is usually the result of calling `frame.insert` many times, which has poor performance.  Consider joining all columns at once using pd.concat(axis=1) instead. To get a de-fragmented frame, use `newframe = frame.copy()`
+  df[f"{col}_lag_{lag}"] = grp[col].shift(lag).fillna(0)         # CAUSAL
+/home/qomaru/Science-Project-version-3/src/features.py:345: PerformanceWarning: DataFrame is highly fragmented.  This is usually the result of calling `frame.insert` many times, which has poor performance.  Consider joining all columns at once using pd.concat(axis=1) instead. To get a de-fragmented frame, use `newframe = frame.copy()`
+  df[f"{col}_lag_{lag}"] = grp[col].shift(lag).fillna(0)         # CAUSAL
+/home/qomaru/Science-Project-version-3/src/features.py:345: PerformanceWarning: DataFrame is highly fragmented.  This is usually the result of calling `frame.insert` many times, which has poor performance.  Consider joining all columns at once using pd.concat(axis=1) instead. To get a de-fragmented frame, use `newframe = frame.copy()`
+  df[f"{col}_lag_{lag}"] = grp[col].shift(lag).fillna(0)         # CAUSAL
+/home/qomaru/Science-Project-version-3/src/features.py:347: PerformanceWarning: DataFrame is highly fragmented.  This is usually the result of calling `frame.insert` many times, which has poor performance.  Consider joining all columns at once using pd.concat(axis=1) instead. To get a de-fragmented frame, use `newframe = frame.copy()`
+  df[f"{col}_mean_{w}d"] = _past_roll(df, col, w, "mean")        # CAUSAL
+/home/qomaru/Science-Project-version-3/src/features.py:347: PerformanceWarning: DataFrame is highly fragmented.  This is usually the result of calling `frame.insert` many times, which has poor performance.  Consider joining all columns at once using pd.concat(axis=1) instead. To get a de-fragmented frame, use `newframe = frame.copy()`
+  df[f"{col}_mean_{w}d"] = _past_roll(df, col, w, "mean")        # CAUSAL
+2026-05-17 09:26:50,388 | INFO | features | Built features for 4472145 rows, 408357 positive labels (fire within 7 days)
+2026-05-17 09:27:13,008 | INFO | train | Saved feature dataset → /home/qomaru/Science-Project-version-3/outputs/features/full_features.parquet
+2026-05-17 09:27:13,016 | INFO | train | ==== STEP 3: build binary label + memory-frugal undersample ====
+/home/qomaru/Science-Project-version-3/src/train.py:1048: PerformanceWarning: DataFrame is highly fragmented.  This is usually the result of calling `frame.insert` many times, which has poor performance.  Consider joining all columns at once using pd.concat(axis=1) instead. To get a de-fragmented frame, use `newframe = frame.copy()`
+  feats["_y_bin"] = _make_binary_label(feats["days_until_fire"]).astype(np.int8)
+2026-05-17 09:27:25,137 | INFO | train | Class distribution before undersample: pos=237087 (5.30%)  neg=4235058  (target: fire ∈ {1..3} days)
+2026-05-17 09:27:33,475 | INFO | train | After global undersample (4:1): 4472145 → 1185435 rows  (pos=237087, neg=948348)
+2026-05-17 09:27:34,603 | INFO | train | ==== STEP 4: chronological train / val / test split ====
+2026-05-17 09:27:36,073 | INFO | train | Split date ranges:
+2026-05-17 09:27:36,254 | INFO | train |   train : 2025-01-31 → 2025-11-10  (711261 rows)
+2026-05-17 09:27:36,304 | INFO | train |   val   : 2025-11-10 → 2026-02-05  (237087 rows)
+2026-05-17 09:27:36,359 | INFO | train |   test  : 2026-02-05 → 2026-05-16  (237087 rows)
+2026-05-17 09:27:36,359 | INFO | train | Using 164 features
+2026-05-17 09:27:36,369 | INFO | train | ==== STEP 4b: compute sample weights (recency + class balance) ====
+2026-05-17 09:27:36,674 | INFO | train | Sample weights: min=0.012 max=26.872 mean=1.000
+2026-05-17 09:27:36,675 | INFO | train | scale_pos_weight = 4.104  (pos=139342, neg=571919 in undersampled train)
+2026-05-17 09:27:36,675 | INFO | train | ==== STEP 5: LightGBM tuning (BayesSearchCV, n_iter=12, n_splits=3, gap=7) ====
+2026-05-17 09:33:28,590 | INFO | train | ⏱️  Tuning time: 351.9 seconds
+2026-05-17 09:33:28,590 | INFO | train | Best params: {'colsample_bytree': 0.7, 'learning_rate': 0.05, 'max_depth': 6, 'min_child_samples': 50, 'n_estimators': 400, 'num_leaves': 63, 'reg_alpha': 0.1, 'reg_lambda': 1.0, 'subsample': 0.9}
+2026-05-17 09:33:28,590 | INFO | train | Best CV score (ROC-AUC): 0.9590
+2026-05-17 09:33:28,590 | INFO | train | ==== STEP 6: refit ensemble on train+val with early stopping ====
+2026-05-17 09:33:40,062 | INFO | train | ⏱️  Ensemble refit time: 11.0 seconds (3 models)
+2026-05-17 09:33:40,062 | INFO | train | ==== STEP 6b: probability calibration (Platt scaling on val) ====
+2026-05-17 09:33:40,580 | INFO | train | Calibration: ECE on val 0.1631 → 0.0538 (lower is better)
+2026-05-17 09:33:40,580 | INFO | train | ==== STEP 7: held-out test evaluation (binary fire-in-3d) ====
+2026-05-17 09:33:41,440 | INFO | train | Binary test metrics: {'roc_auc': 0.8245, 'average_precision': 0.3015, 'accuracy': 0.8113, 'precision': 0.3311, 'recall': 0.4328, 'f1': 0.3752, 'best_f1': 0.4675, 'best_threshold': 0.15, 'precision_at_best_thr': 0.3394, 'recall_at_best_thr': 0.7507, 'deployment_threshold': 0.15, 'deployment_precision': 0.3394, 'deployment_recall': 0.7507, 'deployment_f1': 0.4675, 'deployment_accuracy': 0.7762, 'ece': 0.0837, 'ece_val_before_calibration': 0.1631, 'ece_val_after_calibration': 0.0538, 'reliability_bins': [{'bin_lower': 0.0, 'bin_upper': 0.1, 'mean_predicted': 0.06512153828840302, 'actual_rate': 0.02679322675641565, 'count': 152128}, {'bin_lower': 0.1, 'bin_upper': 0.2, 'mean_predicted': 0.13764621606684474, 'actual_rate': 0.24257365719597462, 'count': 24743}, {'bin_lower': 0.2, 'bin_upper': 0.30000000000000004, 'mean_predicted': 0.24691846315583202, 'actual_rate': 0.25369886858137514, 'count': 4596}, {'bin_lower': 0.30000000000000004, 'bin_upper': 0.4, 'mean_predicted': 0.32005979105450233, 'actual_rate': 0.41355401476179826, 'count': 4471}, {'bin_lower': 0.4, 'bin_upper': 0.5, 'mean_predicted': 0.4713075676270822, 'actual_rate': 0.4254816773706082, 'count': 10588}, {'bin_lower': 0.5, 'bin_upper': 0.6000000000000001, 'mean_predicted': 0.5419317520972015, 'actual_rate': 0.3741925716592652, 'count': 19816}, {'bin_lower': 0.6000000000000001, 'bin_upper': 0.7000000000000001, 'mean_predicted': 0.6348163918817102, 'actual_rate': 0.28994938539407084, 'count': 20745}], 'precision_at_top_5pct': 0.1815, 'precision_at_top_10pct': 0.2984, 'precision_at_top_20pct': 0.3435}
+2026-05-17 09:33:41,443 | INFO | train | Pseudo-days metrics (compat): {'mae': 5.4213, 'rmse': 5.9114, 'r2': -13.4507, 'acc_within_1': 0.0835, 'acc_exact': 0.0374}
+Fitting 3 folds for each of 1 candidates, totalling 3 fits
+[CV] END colsample_bytree=0.8, learning_rate=0.1, max_depth=10, min_child_samples=20, n_estimators=800, num_leaves=63, reg_alpha=0.0, reg_lambda=1.0, subsample=0.7; total time=  10.8s
+[CV] END colsample_bytree=0.8, learning_rate=0.1, max_depth=10, min_child_samples=20, n_estimators=800, num_leaves=63, reg_alpha=0.0, reg_lambda=1.0, subsample=0.7; total time=  13.4s
+[CV] END colsample_bytree=0.8, learning_rate=0.1, max_depth=10, min_child_samples=20, n_estimators=800, num_leaves=63, reg_alpha=0.0, reg_lambda=1.0, subsample=0.7; total time=  17.6s
+Fitting 3 folds for each of 1 candidates, totalling 3 fits
+[CV] END colsample_bytree=1.0, learning_rate=0.1, max_depth=6, min_child_samples=100, n_estimators=800, num_leaves=31, reg_alpha=0.0, reg_lambda=0.1, subsample=0.8; total time=   6.7s
+[CV] END colsample_bytree=1.0, learning_rate=0.1, max_depth=6, min_child_samples=100, n_estimators=800, num_leaves=31, reg_alpha=0.0, reg_lambda=0.1, subsample=0.8; total time=  10.6s
+[CV] END colsample_bytree=1.0, learning_rate=0.1, max_depth=6, min_child_samples=100, n_estimators=800, num_leaves=31, reg_alpha=0.0, reg_lambda=0.1, subsample=0.8; total time=  14.0s
+Fitting 3 folds for each of 1 candidates, totalling 3 fits
+[CV] END colsample_bytree=0.8, learning_rate=0.1, max_depth=6, min_child_samples=50, n_estimators=400, num_leaves=63, reg_alpha=0.0, reg_lambda=1.0, subsample=0.8; total time=   4.1s
+[CV] END colsample_bytree=0.8, learning_rate=0.1, max_depth=6, min_child_samples=50, n_estimators=400, num_leaves=63, reg_alpha=0.0, reg_lambda=1.0, subsample=0.8; total time=   6.8s
+[CV] END colsample_bytree=0.8, learning_rate=0.1, max_depth=6, min_child_samples=50, n_estimators=400, num_leaves=63, reg_alpha=0.0, reg_lambda=1.0, subsample=0.8; total time=   8.5s
+Fitting 3 folds for each of 1 candidates, totalling 3 fits
+[CV] END colsample_bytree=1.0, learning_rate=0.05, max_depth=8, min_child_samples=100, n_estimators=600, num_leaves=31, reg_alpha=0.1, reg_lambda=1.0, subsample=0.9; total time=   6.0s
+[CV] END colsample_bytree=1.0, learning_rate=0.05, max_depth=8, min_child_samples=100, n_estimators=600, num_leaves=31, reg_alpha=0.1, reg_lambda=1.0, subsample=0.9; total time=   9.6s
+[CV] END colsample_bytree=1.0, learning_rate=0.05, max_depth=8, min_child_samples=100, n_estimators=600, num_leaves=31, reg_alpha=0.1, reg_lambda=1.0, subsample=0.9; total time=  11.5s
+Fitting 3 folds for each of 1 candidates, totalling 3 fits
+[CV] END colsample_bytree=1.0, learning_rate=0.05, max_depth=8, min_child_samples=100, n_estimators=800, num_leaves=127, reg_alpha=0.0, reg_lambda=0.1, subsample=0.8; total time=  10.4s
+[CV] END colsample_bytree=1.0, learning_rate=0.05, max_depth=8, min_child_samples=100, n_estimators=800, num_leaves=127, reg_alpha=0.0, reg_lambda=0.1, subsample=0.8; total time=  16.2s
+[CV] END colsample_bytree=1.0, learning_rate=0.05, max_depth=8, min_child_samples=100, n_estimators=800, num_leaves=127, reg_alpha=0.0, reg_lambda=0.1, subsample=0.8; total time=  19.9s
+Fitting 3 folds for each of 1 candidates, totalling 3 fits
+[CV] END colsample_bytree=1.0, learning_rate=0.1, max_depth=6, min_child_samples=20, n_estimators=800, num_leaves=63, reg_alpha=0.0, reg_lambda=0.1, subsample=0.9; total time=   8.4s
+[CV] END colsample_bytree=1.0, learning_rate=0.1, max_depth=6, min_child_samples=20, n_estimators=800, num_leaves=63, reg_alpha=0.0, reg_lambda=0.1, subsample=0.9; total time=  11.3s
+[CV] END colsample_bytree=1.0, learning_rate=0.1, max_depth=6, min_child_samples=20, n_estimators=800, num_leaves=63, reg_alpha=0.0, reg_lambda=0.1, subsample=0.9; total time=  16.3s
+Fitting 3 folds for each of 1 candidates, totalling 3 fits
+[CV] END colsample_bytree=0.8, learning_rate=0.1, max_depth=8, min_child_samples=100, n_estimators=600, num_leaves=63, reg_alpha=0.1, reg_lambda=0.1, subsample=0.9; total time=   7.6s
+[CV] END colsample_bytree=0.8, learning_rate=0.1, max_depth=8, min_child_samples=100, n_estimators=600, num_leaves=63, reg_alpha=0.1, reg_lambda=0.1, subsample=0.9; total time=  11.2s
+[CV] END colsample_bytree=0.8, learning_rate=0.1, max_depth=8, min_child_samples=100, n_estimators=600, num_leaves=63, reg_alpha=0.1, reg_lambda=0.1, subsample=0.9; total time=  13.6s
+Fitting 3 folds for each of 1 candidates, totalling 3 fits
+[CV] END colsample_bytree=0.8, learning_rate=0.1, max_depth=8, min_child_samples=100, n_estimators=400, num_leaves=31, reg_alpha=0.1, reg_lambda=0.0, subsample=0.8; total time=   4.5s
+[CV] END colsample_bytree=0.8, learning_rate=0.1, max_depth=8, min_child_samples=100, n_estimators=400, num_leaves=31, reg_alpha=0.1, reg_lambda=0.0, subsample=0.8; total time=   6.0s
+[CV] END colsample_bytree=0.8, learning_rate=0.1, max_depth=8, min_child_samples=100, n_estimators=400, num_leaves=31, reg_alpha=0.1, reg_lambda=0.0, subsample=0.8; total time=   8.1s
+Fitting 3 folds for each of 1 candidates, totalling 3 fits
+[CV] END colsample_bytree=1.0, learning_rate=0.1, max_depth=10, min_child_samples=50, n_estimators=600, num_leaves=31, reg_alpha=0.0, reg_lambda=0.1, subsample=0.8; total time=   5.1s
+[CV] END colsample_bytree=1.0, learning_rate=0.1, max_depth=10, min_child_samples=50, n_estimators=600, num_leaves=31, reg_alpha=0.0, reg_lambda=0.1, subsample=0.8; total time=   7.9s
+[CV] END colsample_bytree=1.0, learning_rate=0.1, max_depth=10, min_child_samples=50, n_estimators=600, num_leaves=31, reg_alpha=0.0, reg_lambda=0.1, subsample=0.8; total time=  10.3s
+Fitting 3 folds for each of 1 candidates, totalling 3 fits
+[CV] END colsample_bytree=0.7, learning_rate=0.1, max_depth=10, min_child_samples=20, n_estimators=600, num_leaves=31, reg_alpha=0.0, reg_lambda=0.0, subsample=0.9; total time=   4.9s
+[CV] END colsample_bytree=0.7, learning_rate=0.1, max_depth=10, min_child_samples=20, n_estimators=600, num_leaves=31, reg_alpha=0.0, reg_lambda=0.0, subsample=0.9; total time=   7.8s
+[CV] END colsample_bytree=0.7, learning_rate=0.1, max_depth=10, min_child_samples=20, n_estimators=600, num_leaves=31, reg_alpha=0.0, reg_lambda=0.0, subsample=0.9; total time=  10.0s
+Fitting 3 folds for each of 1 candidates, totalling 3 fits
+[CV] END colsample_bytree=0.7, learning_rate=0.05, max_depth=6, min_child_samples=50, n_estimators=400, num_leaves=63, reg_alpha=0.1, reg_lambda=1.0, subsample=0.9; total time=   4.8s
+[CV] END colsample_bytree=0.7, learning_rate=0.05, max_depth=6, min_child_samples=50, n_estimators=400, num_leaves=63, reg_alpha=0.1, reg_lambda=1.0, subsample=0.9; total time=   7.0s
+[CV] END colsample_bytree=0.7, learning_rate=0.05, max_depth=6, min_child_samples=50, n_estimators=400, num_leaves=63, reg_alpha=0.1, reg_lambda=1.0, subsample=0.9; total time=   9.1s
+Fitting 3 folds for each of 1 candidates, totalling 3 fits
+[CV] END colsample_bytree=0.7, learning_rate=0.05, max_depth=6, min_child_samples=50, n_estimators=400, num_leaves=31, reg_alpha=0.1, reg_lambda=1.0, subsample=0.9; total time=   4.6s
+[CV] END colsample_bytree=0.7, learning_rate=0.05, max_depth=6, min_child_samples=50, n_estimators=400, num_leaves=31, reg_alpha=0.1, reg_lambda=1.0, subsample=0.9; total time=   6.4s
+[CV] END colsample_bytree=0.7, learning_rate=0.05, max_depth=6, min_child_samples=50, n_estimators=400, num_leaves=31, reg_alpha=0.1, reg_lambda=1.0, subsample=0.9; total time=   8.7s
+
+============================================================================
+BINARY CLASSIFICATION: fire within next 3 days?  (held-out test)
+============================================================================
+  Test positives: 31028 / 237087 (13.09%)
+  ROC-AUC                : 0.8245   ← GOOD
+  Average Precision (PR) : 0.3015
+  @threshold=0.5  →  acc=81.13%  precision=33.11%  recall=43.28%  F1=37.52%
+  @threshold=0.15  →  F1=46.75%  precision=33.94%  recall=75.07%
+  Precision @ top  5% : 18.15%
+  Precision @ top 10% : 29.84%
+  Precision @ top 20% : 34.35%
+
+============================================================================
+PER-DAY DIAGNOSTIC (pseudo-days = monotone-in-probability)
+============================================================================
+┌─────┬───────┬───────┬───────┬──────────┬──────────┬──────────┬─────────┐2026-05-17 09:33:41,465 | INFO | train | Baseline (always p=0.196) AUC=0.5000 → model AUC=0.8245, uplift vs random +64.90%
+2026-05-17 09:33:41,473 | INFO | train | ==== STEP 8: persist artifacts ====
+2026-05-17 09:33:41,488 | INFO | train | Saved model → /home/qomaru/Science-Project-version-3/outputs/models/lgbm_fire_date_model.pkl
+2026-05-17 09:33:41,495 | INFO | train | ==== STEP 9: render PNG training report ====
+2026-05-17 09:40:51,547 | INFO | train | ⏱️  Total training time: 1162.1 seconds
+2026-05-17 09:40:52,256 | INFO | train | Saved metadata → /home/qomaru/Science-Project-version-3/outputs/metadata/dataset_info.json
+2026-05-17 09:40:52,257 | INFO | train | ==== STEP 10: refresh risk map ====

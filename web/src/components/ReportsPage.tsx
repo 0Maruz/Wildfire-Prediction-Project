@@ -1,5 +1,6 @@
 import { useMemo } from "react";
 import type { FireFeature, ValidationMetrics } from "../types";
+import StatisticsSection from "./StatisticsSection";
 
 interface Props {
   metrics: ValidationMetrics | null;
@@ -81,14 +82,27 @@ export default function ReportsPage({ metrics, predictedAll }: Props) {
       .slice(0, 15);
   }, [predictedAll]);
 
+  const sciStats = metrics?.scientific_stats;
+
   return (
     <div className="reports-page">
       <header className="notify-page-header">
-        <h1>📊 รายงาน</h1>
+        <h1>📊 รายงาน · Scientific Analysis</h1>
         <p className="notify-page-subtitle">
-          Performance + data breakdown · ตัวเลขจาก held-out test + rolling monthly eval
+          Held-out test set performance + bootstrap confidence intervals + statistical tests
         </p>
       </header>
+
+      {/* Scientific stats first — the main "proof" section */}
+      {sciStats ? (
+        <StatisticsSection stats={sciStats} />
+      ) : (
+        <section className="report-section">
+          <p style={{ color: "var(--text-3)" }}>
+            ยังไม่มี scientific stats · รัน <code style={{ background: "var(--surface-2)", padding: "1px 4px", borderRadius: 3 }}>.venv/bin/python scripts/scientific_stats.py</code> เพื่อสร้าง
+          </p>
+        </section>
+      )}
 
       {/* Section 1: Rolling AUC */}
       <section className="report-section">
