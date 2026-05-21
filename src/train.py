@@ -28,7 +28,6 @@ Spec compliance notes:
 from __future__ import annotations
 
 import argparse
-import json
 import logging
 import os
 import time
@@ -36,7 +35,6 @@ import warnings
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
-import joblib
 import numpy as np
 import pandas as pd
 from dotenv import load_dotenv
@@ -65,7 +63,7 @@ from features import (
     build_features,
     resolve_features,
 )
-from io_utils import resolve_existing, write_table
+from storage import resolve_existing, write_json, write_pickle, write_table
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s | %(levelname)s | %(name)s | %(message)s"
@@ -1348,14 +1346,13 @@ def main(
 
     log.info("==== STEP 8: persist artifacts ====")
     model_path = os.path.join(p["model_dir"], "lgbm_fire_date_model.pkl")
-    joblib.dump(best_model, model_path)
+    write_pickle(best_model, model_path)
     log.info("Saved model → %s", model_path)
 
     history_dir = os.path.join(p["model_dir"], "history")
-    os.makedirs(history_dir, exist_ok=True)
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     history_path = os.path.join(history_dir, f"{timestamp}_lightgbm.pkl")
-    joblib.dump(best_model, history_path)
+    write_pickle(best_model, history_path)
 
     feature_importance: List[Dict[str, Any]] = []
     if hasattr(best_model, "feature_importances_") and best_model.feature_importances_ is not None:
@@ -1490,8 +1487,7 @@ def main(
     }
 
     meta_path = os.path.join(p["meta_dir"], "dataset_info.json")
-    with open(meta_path, "w", encoding="utf-8") as f:
-        json.dump(metadata, f, indent=2, default=str)
+    write_json(metadata, meta_path, indent=2, default=str)
     log.info("Saved metadata → %s", meta_path)
 
     if not skip_risk_map:

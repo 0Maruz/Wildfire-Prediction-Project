@@ -13,7 +13,6 @@
 
 import os
 import json
-import joblib
 import numpy as np
 import pandas as pd
 from datetime import timedelta
@@ -28,7 +27,7 @@ from features import (
     calibrate_urgency_thresholds,
     urgency_from_thresholds,
 )
-from io_utils import read_table
+from storage import exists, read_json, read_pickle, read_table, write_json
 from urban_areas import THAI_URBAN_AREAS, classify_urban
 from thailand_boundary import is_in_thailand, find_province
 
@@ -112,11 +111,10 @@ COUNTRY_FILTER_ENABLED = os.getenv("COUNTRY_FILTER_ENABLED", "true").lower() in 
 # =========================================================
 
 def _load_metadata() -> dict:
-    if not os.path.exists(META_PATH):
+    if not exists(META_PATH):
         return {}
     try:
-        with open(META_PATH, "r", encoding="utf-8") as f:
-            return json.load(f)
+        return read_json(META_PATH)
     except (OSError, json.JSONDecodeError):
         return {}
 
@@ -155,7 +153,7 @@ def load_assets():
     """
     # The pickled `_EnsembleRegressor` was saved with `__module__ = "__main__"`
     # because train.py ran as __main__. When risk_map.py runs standalone, our
-    # __main__ doesn't have that class. Alias it before joblib.load.
+    # __main__ doesn't have that class. Alias it before unpickling.
     import sys
     try:
         import train as _train
@@ -167,7 +165,7 @@ def load_assets():
     except ImportError:
         pass
 
-    model = joblib.load(MODEL_PATH)
+    model = read_pickle(MODEL_PATH)
 
     import pyarrow as pa
     import pyarrow.parquet as pq
@@ -707,10 +705,9 @@ def append_geojson(observed: pd.DataFrame, predicted: pd.DataFrame, base_date, t
     base_date_str = base_date.strftime("%Y-%m-%d")
 
     geojson = {"type": "FeatureCollection", "features": []}
-    if os.path.exists(GEOJSON_PATH):
+    if exists(GEOJSON_PATH):
         try:
-            with open(GEOJSON_PATH, "r", encoding="utf-8") as f:
-                geojson = json.load(f)
+            geojson = read_json(GEOJSON_PATH)
         except json.JSONDecodeError:
             print("⚠️ Corrupted GeoJSON → recreate")
 
@@ -830,21 +827,19 @@ def append_geojson(observed: pd.DataFrame, predicted: pd.DataFrame, base_date, t
                 f"(±1 day window, {validation_summary['future']} still pending)"
             )
 
-    with open(GEOJSON_PATH, "w", encoding="utf-8") as f:
-        json.dump(geojson, f, indent=2)
+    write_json(geojson, GEOJSON_PATH, indent=2)
 
-    with open(LATEST_PATH, "w", encoding="utf-8") as f:
-        json.dump(
-            {
-                "base_date": base_date_str,
-                "observed_date": observed_date_str,
-                "prediction_horizon_days": MAX_PREDICTION_DAYS,
-                "urgency_thresholds": thresholds,
-                "metrics": metrics,
-            },
-            f,
-            indent=2,
-        )
+    write_json(
+        {
+            "base_date": base_date_str,
+            "observed_date": observed_date_str,
+            "prediction_horizon_days": MAX_PREDICTION_DAYS,
+            "urgency_thresholds": thresholds,
+            "metrics": metrics,
+        },
+        LATEST_PATH,
+        indent=2,
+    )
 
 
 # =========================================================

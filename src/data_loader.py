@@ -18,7 +18,7 @@ from typing import Iterable, List, Optional
 import numpy as np
 import pandas as pd
 
-from io_utils import list_tables, read_table, resolve_existing
+from storage import list_tables, read_table, resolve_existing
 from urban_areas import classify_urban
 
 log = logging.getLogger("data_loader")

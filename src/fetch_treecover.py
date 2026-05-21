@@ -37,6 +37,8 @@ from typing import Tuple
 import numpy as np
 import pandas as pd
 import rasterio
+
+from storage import write_table
 from rasterio.enums import Resampling
 from rasterio.warp import reproject
 from rasterio.windows import Window
@@ -195,7 +197,7 @@ def main() -> None:
         "tree_loss_pct_recent": loss.flatten().astype(float),
     })
 
-    df.to_parquet(OUT_PATH, index=False)
+    write_table(df, OUT_PATH)
     log.info(
         "Saved %d cells → %s",
         len(df), OUT_PATH,

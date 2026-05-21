@@ -21,7 +21,6 @@ from datetime import datetime, timedelta, timezone
 from threading import Lock
 from typing import List, Literal, Optional
 
-import joblib
 import numpy as np
 import pandas as pd
 from dotenv import load_dotenv
@@ -41,7 +40,7 @@ from features import (
     MAX_PREDICTION_DAYS,
     urgency_from_thresholds,
 )
-from io_utils import read_table, resolve_existing
+from storage import exists, read_json, read_pickle, read_table, resolve_existing
 
 # =====================================
 # CONFIG
@@ -86,11 +85,10 @@ HISTORY_WINDOW_DAYS = 30
 
 
 def _load_metadata() -> dict:
-    if not os.path.exists(META_PATH):
+    if not exists(META_PATH):
         return {}
     try:
-        with open(META_PATH, "r", encoding="utf-8") as f:
-            return json.load(f)
+        return read_json(META_PATH)
     except (OSError, json.JSONDecodeError):
         return {}
 
@@ -238,7 +236,7 @@ async def lifespan(app: FastAPI):
         raise RuntimeError(f"Feature file not found at {FEATURE_PATH}. Run train.py first.")
 
     _register_model_classes_in_main()
-    app.state.model = joblib.load(MODEL_PATH)
+    app.state.model = read_pickle(MODEL_PATH)
 
     df_latest, historical_counts = _load_minimal_state(feature_path)
     app.state.df = df_latest
@@ -458,11 +456,10 @@ def rolling_eval(_request: Request):
     been run yet (the file at outputs/metadata/rolling_eval.json is absent).
     """
     path = os.path.join(BASE_DIR, "outputs", "metadata", "rolling_eval.json")
-    if not os.path.exists(path):
+    if not exists(path):
         return {"summary": None, "months": []}
     try:
-        with open(path) as f:
-            data = json.load(f)
+        data = read_json(path)
     except (OSError, json.JSONDecodeError) as e:
         return _json_sanitize({"summary": None, "months": [], "error": str(e)})
     # Frontend type RollingMonthPoint expects {month, auc, positive_rate, n}.
@@ -533,7 +530,7 @@ def predictions_today(request: Request):
 
     urgency_summary = today["urgency_level"].value_counts().to_dict()
 
-    return {
+    return _json_sanitize({
         "base_date": str(latest_date),
         "prediction_horizon_days": MAX_PREDICTION_DAYS,
         "total_locations": len(today),
@@ -547,7 +544,7 @@ def predictions_today(request: Request):
              "predicted_fire_date", "urgency_level", "confidence",
              "historical_fire_count_30d"]
         ].to_dict(orient="records"),
-    }
+    })
 
 
 @app.get("/predictions/timeline")
@@ -574,11 +571,11 @@ def predictions_timeline(request: Request):
             "locations": today[mask][["lat_grid", "lon_grid"]].to_dict(orient="records"),
         }
 
-    return {
+    return _json_sanitize({
         "base_date": str(latest_date),
         "urgency_thresholds": thresholds,
         "timeline": timeline,
-    }
+    })
 
 
 @app.get("/predictions/day/{day}")
@@ -609,7 +606,7 @@ def predictions_for_day(day: int, request: Request):
     sel = sel.merge(request.app.state.historical_counts, on=["lat_grid", "lon_grid"], how="left")
     sel["historical_fire_count_30d"] = sel["historical_fire_count_30d"].fillna(0).astype(int)
 
-    return {
+    return _json_sanitize({
         "base_date": str(latest_date),
         "day_offset": day,
         "predicted_fire_date": target_date.strftime("%Y-%m-%d"),
@@ -618,15 +615,14 @@ def predictions_for_day(day: int, request: Request):
             ["lat_grid", "lon_grid", "urgency_level", "confidence",
              "historical_fire_count_30d"]
         ].to_dict(orient="records"),
-    }
+    })
 
 
 @app.get("/geojson")
 def get_geojson():
-    if not os.path.exists(GEOJSON_PATH):
+    if not exists(GEOJSON_PATH):
         raise HTTPException(status_code=404, detail="GeoJSON not generated yet. Run risk_map.py.")
-    with open(GEOJSON_PATH, "r", encoding="utf-8") as f:
-        data = json.load(f)
+    data = read_json(GEOJSON_PATH)
     return _json_sanitize(data)
 
 
@@ -684,7 +680,7 @@ def predict_location(
     ]
     historical_count = int(hist_row["historical_fire_count_30d"].iloc[0]) if len(hist_row) else 0
 
-    return {
+    return _json_sanitize({
         "location": {"lat": lat_grid, "lon": lon_grid},
         "base_date": str(latest_date),
         "days_until_fire": days,
@@ -695,7 +691,7 @@ def predict_location(
         "confidence_note": (
             "confidence is a rounding-proximity proxy, not a calibrated probability."
         ),
-    }
+    })
 
 
 # =====================================
@@ -913,13 +909,13 @@ def _load_weather_cache():
     global _WEATHER_CACHE_DF
     if _WEATHER_CACHE_DF is not None:
         return _WEATHER_CACHE_DF
-    if not os.path.exists(WEATHER_CACHE_PATH):
+    if not exists(WEATHER_CACHE_PATH):
         _WEATHER_CACHE_DF = pd.DataFrame(
             columns=["lat_grid", "lon_grid", "date", "temp_max", "temp_min",
                      "precip_sum", "wind_max", "et0"]
         )
         return _WEATHER_CACHE_DF
-    df = pd.read_parquet(WEATHER_CACHE_PATH)
+    df = read_table(WEATHER_CACHE_PATH)
     df["date"] = pd.to_datetime(df["date"])
     _WEATHER_CACHE_DF = df
     return df
