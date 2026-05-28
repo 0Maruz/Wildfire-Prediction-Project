@@ -49,7 +49,7 @@ from dotenv import load_dotenv
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
-from io_utils import read_table, resolve_existing, write_table
+from storage import read_table, resolve_existing, write_table
 
 load_dotenv()
 

@@ -1,5 +1,6 @@
 import { useState } from "react";
 import type { FireFeature, ValidationMetrics } from "../types";
+import { readProbability } from "../utils/probability";
 
 interface Props {
   predicted: FireFeature[];
@@ -29,10 +30,7 @@ export default function ActionToolbar({
     const rows = predicted.map((f) => {
       const [lon, lat] = f.geometry.coordinates;
       const p = f.properties;
-      // raw_prediction is pseudo-days; recover probability
-      const prob = typeof p.raw_prediction === "number"
-        ? Math.max(0, Math.min(1, 1 - (p.raw_prediction - 1) / 6))
-        : null;
+      const prob = readProbability(p);
       return [
         lat.toFixed(4),
         lon.toFixed(4),

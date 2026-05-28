@@ -71,6 +71,31 @@ export interface ValidationMetrics {
   feature_importance_top?: { feature: string; importance: number }[];
   // ── Scientific statistics (from scripts/scientific_stats.py) ──
   scientific_stats?: ScientificStats;
+  // ── Training summary (real persisted values from dataset_info.json) ──
+  training_summary?: TrainingSummary;
+}
+
+export interface TrainingSummary {
+  trained_at?: string;
+  data_source?: string;
+  date_range?: [string | null, string | null];
+  total_days?: number;
+  active_cells?: number;
+  grid_size_deg?: number;
+  training_rows?: number;
+  feature_count?: number;
+  weather_features_count?: number;
+  prediction_type?: string;
+  imminent_days?: number;
+  training_time_seconds?: number;
+  model_type?: string;
+  search_method?: string;
+  search_iterations?: number;
+  cv_n_splits?: number;
+  cv_gap_days?: number;
+  ensemble_size?: number;
+  early_stopping_rounds?: number;
+  best_params?: Record<string, number | string | boolean | null>;
 }
 
 export interface BootstrapCI {
@@ -169,6 +194,10 @@ export interface PredictionProperties {
   predicted_fire_date?: string;
   days_until_fire?: number;
   raw_prediction?: number;
+  // Real probability (0..1) recovered from the binary classifier — only
+  // written by newer risk_map.py runs. Older snapshots omit it and the
+  // frontend falls back to inverting raw_prediction.
+  probability?: number;
   urgency_level?: UrgencyLevel;
   confidence?: number;
   province?: string;
@@ -235,16 +264,13 @@ export interface NotifyLogRecord {
   status: "queued" | "sent" | "failed";
 }
 
-export type AlertPageRoute = "dashboard" | "notify" | "live" | "reports";
+export type AlertPageRoute = "dashboard" | "notify" | "live" | "reports" | "compare" | "analytics";
 
 export type DaySelection = "all" | "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7";
 
 export interface DisplayOptions {
   showObserved: boolean;
   showLiveFires: boolean;
-  // Internal "always-on" flags, kept in the type so MapView's prop contract
-  // doesn't have to branch. The Sidebar no longer exposes user toggles for
-  // these — predictions + cell pins are part of the core dashboard now.
   showPredicted: boolean;
   showCellPins: boolean;
   heatRadius: number;

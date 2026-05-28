@@ -1,5 +1,6 @@
 import { useMemo, useRef, useState } from "react";
 import type { FireFeature, GistdaFeature, LiveFireMeta } from "../types";
+import { fmtTr, useLang } from "../utils/i18n";
 
 interface Props {
   liveFires: GistdaFeature[];               // GISTDA NRT — live <30 min latency
@@ -46,10 +47,21 @@ interface Incident {
 
 function _formatGistdaTime(date?: number, time?: string): { iso: string; ms: number } {
   if (!date) return { iso: "", ms: 0 };
-  const s = String(date);
+  const s = String(Math.round(date));
+  // ArcGIS GeoJSON (f=geojson) returns esriFieldTypeDate as Unix ms — 13 digits.
+  // Some older exports use Unix seconds (10 digits). Handle both.
+  if (s.length >= 10) {
+    const ms = s.length >= 13 ? date : date * 1000;
+    return isNaN(ms) ? { iso: "", ms: 0 } : { iso: new Date(ms).toISOString(), ms };
+  }
+  // Fallback: 8-digit YYYYMMDD integer with optional HHMM time string.
   if (s.length !== 8) return { iso: "", ms: 0 };
   const isoDate = `${s.slice(0, 4)}-${s.slice(4, 6)}-${s.slice(6, 8)}`;
-  const iso = time ? `${isoDate}T${time}:00+07:00` : `${isoDate}T00:00:00+07:00`;
+  // GISTDA time field is HHMM without colon — convert to HH:MM
+  const hhmm = time && time.length === 4
+    ? `${time.slice(0, 2)}:${time.slice(2, 4)}`
+    : (time ?? "00:00");
+  const iso = `${isoDate}T${hhmm}:00+07:00`;
   const ms = Date.parse(iso);
   return { iso, ms: isNaN(ms) ? 0 : ms };
 }
@@ -106,13 +118,13 @@ function _firmsObservedToIncident(f: FireFeature): Incident {
   };
 }
 
-function _timeAgo(ms: number): string {
+function _timeAgo(ms: number, t: (k: string, fb?: string) => string): string {
   if (!ms) return "—";
   const diff = (Date.now() - ms) / 1000;
-  if (diff < 60) return `${Math.round(diff)} วินาทีที่แล้ว`;
-  if (diff < 3600) return `${Math.round(diff / 60)} นาทีที่แล้ว`;
-  if (diff < 86400) return `${Math.round(diff / 3600)} ชั่วโมงที่แล้ว`;
-  return `${Math.round(diff / 86400)} วันที่แล้ว`;
+  if (diff < 60)    return fmtTr(t("live.ago.seconds"), { n: Math.round(diff) });
+  if (diff < 3600)  return fmtTr(t("live.ago.minutes"), { n: Math.round(diff / 60) });
+  if (diff < 86400) return fmtTr(t("live.ago.hours"),   { n: Math.round(diff / 3600) });
+  return                   fmtTr(t("live.ago.days"),    { n: Math.round(diff / 86400) });
 }
 
 const SOURCE_COLOR: Record<IncidentSource, string> = {
@@ -128,6 +140,7 @@ const SOURCE_INFO: Record<IncidentSource, { full: string; org: string }> = {
 export default function LiveFiresPage({
   liveFires, observed, liveFireMeta, onRefresh, onNavigateToMap,
 }: Props) {
+  const { t } = useLang();
   const [sourceFilter, setSourceFilter] = useState<IncidentSource | "ALL">("ALL");
   const [provinceFilter, setProvinceFilter] = useState<string>("ALL");
   const [timeWindow, setTimeWindow] = useState<number>(3); // days
@@ -232,26 +245,33 @@ export default function LiveFiresPage({
     <div className="notify-page">
       <header className="notify-page-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 16, flexWrap: "wrap" }}>
         <div>
-          <h1>🔥 ไฟสด · Real-time Fire Incidents</h1>
+          <h1>{t("live.title")}</h1>
           <p className="notify-page-subtitle">
-            จุดที่ดาวเทียม "เห็นไฟจริง" ในเวลาใกล้เคียง real-time · จาก 2 หน่วยงานอิสระ
+            {t("live.subtitle")}
             <button
               type="button"
               onClick={() => setShowHelp(!showHelp)}
               style={{ marginLeft: 8, background: "transparent", border: "none", color: "var(--accent)", cursor: "pointer", fontSize: 12, fontWeight: 600 }}
             >
-              {showHelp ? "ซ่อนคำอธิบาย ▲" : "ดูคำอธิบายเพิ่ม ▼"}
+              {showHelp ? t("live.help.hide") : t("live.help.show")}
             </button>
           </p>
         </div>
-        <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-          <span className={`status-badge ${liveStatus === "ok" ? "great" : liveStatus === "error" ? "bad" : "ok"}`}>
-            ⚡ GISTDA {liveStatusLabel}
-          </span>
-          {onRefresh && (
-            <button type="button" className="action-btn" onClick={onRefresh} title="Refresh feed">
-              ↻ Refresh
-            </button>
+        <div style={{ display: "flex", gap: 6, alignItems: "center", flexDirection: "column" }}>
+          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+            <span className={`status-badge ${liveStatus === "ok" ? "great" : liveStatus === "error" ? "bad" : "ok"}`}>
+              ⚡ GISTDA {liveStatusLabel}
+            </span>
+            {onRefresh && (
+              <button type="button" className="action-btn" onClick={onRefresh} title="Refresh feed">
+                ↻ Refresh
+              </button>
+            )}
+          </div>
+          {liveFireMeta.lastFetch && (
+            <div style={{ fontSize: 10, color: "var(--text-3)", textAlign: "right" }}>
+              {fmtTr(t("live.updated"), { time: liveFireMeta.lastFetch.toLocaleTimeString() })}
+            </div>
           )}
         </div>
       </header>
@@ -269,49 +289,48 @@ export default function LiveFiresPage({
             {/* GISTDA */}
             <div style={{ borderLeft: `3px solid ${SOURCE_COLOR.GISTDA}`, paddingLeft: 14 }}>
               <h4 style={{ fontSize: 13, fontWeight: 700, marginBottom: 6, color: SOURCE_COLOR.GISTDA }}>
-                🛰 GISTDA (สำนักงานพัฒนาเทคโนโลยีอวกาศและภูมิสารสนเทศ)
+                {t("live.help.gistda")}
               </h4>
               <p style={{ fontSize: 12, color: "var(--text-2)", lineHeight: 1.55, marginBottom: 6 }}>
-                หน่วยงานราชการไทย · ดึงข้อมูลดาวเทียม VIIRS แล้วประมวลผลเอง
+                {t("live.help.gistda.sub")}
               </p>
               <ul style={{ fontSize: 11, color: "var(--text-3)", paddingLeft: 18, lineHeight: 1.6 }}>
-                <li>Latency: <b>~30 นาที</b> หลัง satellite pass</li>
-                <li>ครอบคลุม: เฉพาะประเทศไทย</li>
-                <li>มีข้อมูล: จังหวัด, อำเภอ, ประเภทพื้นที่ (lu_name)</li>
-                <li>ยืนยันที่: <a href="https://fire.gistda.or.th/" target="_blank" rel="noopener noreferrer" style={{ color: SOURCE_COLOR.GISTDA }}>fire.gistda.or.th</a></li>
+                <li>{t("live.help.gistda.lat")}</li>
+                <li>{t("live.help.gistda.cov")}</li>
+                <li>{t("live.help.gistda.data")}</li>
+                <li>{t("live.help.gistda.verify")}: <a href="https://fire.gistda.or.th/" target="_blank" rel="noopener noreferrer" style={{ color: SOURCE_COLOR.GISTDA }}>fire.gistda.or.th</a></li>
               </ul>
             </div>
             {/* FIRMS */}
             <div style={{ borderLeft: `3px solid ${SOURCE_COLOR.FIRMS}`, paddingLeft: 14 }}>
               <h4 style={{ fontSize: 13, fontWeight: 700, marginBottom: 6, color: SOURCE_COLOR.FIRMS }}>
-                🛰 NASA FIRMS (Fire Information for Resource Management System)
+                {t("live.help.firms")}
               </h4>
               <p style={{ fontSize: 12, color: "var(--text-2)", lineHeight: 1.55, marginBottom: 6 }}>
-                NASA Earth Science Data · ดาวเทียม Suomi-NPP + NOAA-20 VIIRS
+                {t("live.help.firms.sub")}
               </p>
               <ul style={{ fontSize: 11, color: "var(--text-3)", paddingLeft: 18, lineHeight: 1.6 }}>
-                <li>Latency: <b>3–6 ชั่วโมง</b> หลัง satellite pass</li>
-                <li>ครอบคลุม: ทั่วโลก (ของเรากรอง BBOX 4–22°N, 96–107°E)</li>
-                <li>มีข้อมูล: lat/lon, satellite, confidence band</li>
-                <li>ยืนยันที่: <a href="https://firms.modaps.eosdis.nasa.gov/map/" target="_blank" rel="noopener noreferrer" style={{ color: SOURCE_COLOR.FIRMS }}>firms.modaps.eosdis.nasa.gov</a></li>
+                <li>{t("live.help.firms.lat")}</li>
+                <li>{t("live.help.firms.cov")}</li>
+                <li>{t("live.help.firms.data")}</li>
+                <li>{t("live.help.firms.verify")}: <a href="https://firms.modaps.eosdis.nasa.gov/map/" target="_blank" rel="noopener noreferrer" style={{ color: SOURCE_COLOR.FIRMS }}>firms.modaps.eosdis.nasa.gov</a></li>
               </ul>
             </div>
           </div>
 
           <div style={{ padding: "12px 14px", background: "var(--surface-2)", borderRadius: 6, marginBottom: 12 }}>
             <h4 style={{ fontSize: 12, fontWeight: 700, marginBottom: 6, color: "var(--text)" }}>
-              ✓ ดูยังไงว่าเป็น "ไฟจริง"?
+              {t("live.help.howreal")}
             </h4>
             <ol style={{ fontSize: 12, color: "var(--text-2)", paddingLeft: 18, lineHeight: 1.7 }}>
-              <li><b>กดปุ่ม "🔗 Verify"</b> ของ entry ใดๆ → จะเปิดเว็บ official ของ NASA/GISTDA → หา hotspot ที่ตำแหน่งเดียวกัน → ตรงกัน = ของจริง</li>
-              <li><b>มอง badge ✓ Cross-verified</b> (สีเขียว) — แปลว่า "ทั้ง 2 ดาวเทียมเห็นไฟตำแหน่งเดียวกัน ใน 24 ชม." → น่าเชื่อมาก</li>
-              <li><b>confidence ของ GISTDA:</b> H (สูง), N (ปกติ), L (ต่ำ) — H ใกล้แน่นอน 100%</li>
+              <li>{t("live.help.bullet1")}</li>
+              <li>{t("live.help.bullet2")}</li>
+              <li>{t("live.help.bullet3")}</li>
             </ol>
           </div>
 
           <div style={{ padding: "10px 12px", background: "rgba(234, 179, 8, 0.10)", border: "1px solid rgba(234, 179, 8, 0.3)", borderRadius: 6, fontSize: 11, color: "var(--text-2)", lineHeight: 1.55 }}>
-            ⚠ <b>ทำไมบาง entry ไม่มีจังหวัด:</b> FIRMS รวบรวมจุดร้อนใน BBOX ทั้งหมด (96–107°E ครอบคลุมไทย+ลาว+กัมพูชา+เวียดนาม+พม่าเหนือ) — entry ที่ไม่มีจังหวัด = อยู่นอกไทย.
-            เปิด toggle <b>"🇹🇭 ในไทยเท่านั้น"</b> ด้านล่างเพื่อกรองออก
+            {t("live.help.province")}
           </div>
         </div>
       )}
@@ -319,11 +338,11 @@ export default function LiveFiresPage({
       {/* Top counts strip */}
       <div className="alert-counts" style={{ gridTemplateColumns: "repeat(4, 1fr)" }}>
         <div className="alert-count-card" style={{ borderLeftColor: "#ef4444" }}>
-          <div className="alert-count-label" style={{ color: "#ef4444" }}>ใน 1 ชม.</div>
+          <div className="alert-count-label" style={{ color: "#ef4444" }}>{t("live.count.h1")}</div>
           <div className="alert-count-value">{sourceCounts.last1h}</div>
         </div>
         <div className="alert-count-card" style={{ borderLeftColor: "#f97316" }}>
-          <div className="alert-count-label" style={{ color: "#f97316" }}>ใน 24 ชม.</div>
+          <div className="alert-count-label" style={{ color: "#f97316" }}>{t("live.count.h24")}</div>
           <div className="alert-count-value">{sourceCounts.last24h}</div>
         </div>
         <button
@@ -365,27 +384,27 @@ export default function LiveFiresPage({
             onChange={(e) => setThailandOnly(e.target.checked)}
             style={{ margin: 0 }}
           />
-          🇹🇭 ในไทยเท่านั้น
+          {t("live.filter.thailand")}
         </label>
         <select value={sourceFilter} onChange={(e) => setSourceFilter(e.target.value as IncidentSource | "ALL")}>
-          <option value="ALL">ทุก source</option>
+          <option value="ALL">{t("live.filter.all_source")}</option>
           <option value="GISTDA">GISTDA only</option>
           <option value="FIRMS">FIRMS only</option>
         </select>
         <select value={provinceFilter} onChange={(e) => setProvinceFilter(e.target.value)}>
-          <option value="ALL">ทุกจังหวัด</option>
+          <option value="ALL">{t("live.filter.all_province")}</option>
           {provinces.map((p) => <option key={p} value={p}>{p}</option>)}
         </select>
         <select value={timeWindow} onChange={(e) => setTimeWindow(Number(e.target.value))}>
-          <option value={0.25}>6 ชั่วโมงล่าสุด</option>
-          <option value={1}>24 ชั่วโมงล่าสุด</option>
-          <option value={3}>3 วันล่าสุด</option>
-          <option value={7}>7 วันล่าสุด</option>
-          <option value={30}>30 วันล่าสุด</option>
+          <option value={0.25}>{t("live.filter.window.6h")}</option>
+          <option value={1}>{t("live.filter.window.24h")}</option>
+          <option value={3}>{t("live.filter.window.3d")}</option>
+          <option value={7}>{t("live.filter.window.7d")}</option>
+          <option value={30}>{t("live.filter.window.30d")}</option>
         </select>
         <input
           type="search"
-          placeholder="ค้นหาจังหวัด/อำเภอ/พิกัด..."
+          placeholder={t("live.search.placeholder")}
           value={search}
           onChange={(e) => setSearch(e.target.value)}
         />
@@ -398,10 +417,8 @@ export default function LiveFiresPage({
       {filtered.length === 0 ? (
         <div className="empty-state">
           <div className="empty-icon">🌲</div>
-          <div className="empty-title">ไม่มีไฟใน timeline ที่เลือก</div>
-          <div className="empty-hint">
-            ลองขยาย time window หรือเปลี่ยน filter · ช่วงนอกฤดูเผา (พ.ค.–ต.ค.) ไฟจะน้อยมาก
-          </div>
+          <div className="empty-title">{t("live.empty.title")}</div>
+          <div className="empty-hint">{t("live.empty.hint")}</div>
         </div>
       ) : (
         <div className="incident-feed">
@@ -415,7 +432,7 @@ export default function LiveFiresPage({
                 style={{ borderLeftColor: SOURCE_COLOR[i.source] }}
               >
                 <div className="incident-time">
-                  <div className="incident-time-rel">{_timeAgo(i.detectedAt)}</div>
+                  <div className="incident-time-rel">{_timeAgo(i.detectedAt, t)}</div>
                   <div className="incident-time-abs">{i.detectedAtStr}</div>
                 </div>
                 <div className="incident-body">
@@ -440,11 +457,11 @@ export default function LiveFiresPage({
                       </>
                     ) : _isInThailandBbox(i.lat, i.lon) ? (
                       <span style={{ color: "var(--text-2)", fontWeight: 500, fontSize: 14 }}>
-                        🇹🇭 พื้นที่ไทย <span style={{ color: "var(--text-3)", fontSize: 11 }}>(ไม่ระบุจังหวัด)</span>
+                        {t("live.area.thailand")} <span style={{ color: "var(--text-3)", fontSize: 11 }}>{t("live.area.thailand.unk")}</span>
                       </span>
                     ) : (
                       <span style={{ color: "var(--text-3)", fontWeight: 500, fontSize: 13 }}>
-                        🌏 นอกประเทศไทย (ลาว/พม่า/กัมพูชา/เวียดนาม)
+                        {t("live.area.foreign")}
                       </span>
                     )}
                   </h3>
@@ -460,7 +477,7 @@ export default function LiveFiresPage({
                       style={{ padding: "4px 10px", fontSize: 11 }}
                       onClick={() => onNavigateToMap(i.lat, i.lon)}
                     >
-                      📍 ดูบนแผนที่
+                      {t("live.btn.view_map")}
                     </button>
                     <a
                       href={i.verifyUrl}
@@ -470,7 +487,7 @@ export default function LiveFiresPage({
                       style={{ padding: "4px 10px", fontSize: 11, textDecoration: "none" }}
                       title={`Verify on ${SOURCE_INFO[i.source].full} official map`}
                     >
-                      🔗 Verify ที่ {i.source}
+                      {fmtTr(t("live.btn.verify"), { source: i.source })}
                     </a>
                   </div>
                 </div>
@@ -484,7 +501,7 @@ export default function LiveFiresPage({
               marginTop: 6,
             }}>
               <div style={{ fontSize: 12, color: "var(--text-3)" }}>
-                แสดง <b style={{ color: "var(--text)" }}>{pageSize}</b> จาก <b style={{ color: "var(--text)" }}>{filtered.length}</b> incidents
+                {fmtTr(t("live.paginator.summary"), { n: pageSize, total: filtered.length })}
               </div>
               <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "center" }}>
                 <button
@@ -492,21 +509,21 @@ export default function LiveFiresPage({
                   className="action-btn primary"
                   onClick={() => setPageSize(pageSize + 50)}
                 >
-                  ⬇ โหลดอีก 50
+                  {t("live.paginator.more50")}
                 </button>
                 <button
                   type="button"
                   className="action-btn"
                   onClick={() => setPageSize(pageSize + 200)}
                 >
-                  ⬇⬇ โหลดอีก 200
+                  {t("live.paginator.more200")}
                 </button>
                 <button
                   type="button"
                   className="action-btn"
                   onClick={() => setPageSize(filtered.length)}
                 >
-                  ⬇⬇⬇ แสดงทั้งหมด ({filtered.length})
+                  {fmtTr(t("live.paginator.all"), { n: filtered.length })}
                 </button>
               </div>
             </div>
@@ -518,7 +535,7 @@ export default function LiveFiresPage({
                 onClick={() => setPageSize(50)}
                 style={{ fontSize: 11 }}
               >
-                ⬆ ย่อกลับ (50)
+                {t("live.paginator.collapse")}
               </button>
             </div>
           ) : null}

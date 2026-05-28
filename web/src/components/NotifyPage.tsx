@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { fetchNotifyLog, postNotify } from "../api";
+import { fmtTr, useLang } from "../utils/i18n";
+import { readProbability } from "../utils/probability";
 import type {
   FireFeature,
   NotifyChannel,
@@ -128,9 +130,7 @@ function extractAlertRows(features: FireFeature[]): AlertRow[] {
     const p = f.properties;
     if (p.source !== "predicted") continue;
     const [lon, lat] = f.geometry.coordinates;
-    const prob = typeof p.raw_prediction === "number"
-      ? Math.max(0, Math.min(1, 1 - (p.raw_prediction - 1) / 6))
-      : null;
+    const prob = readProbability(p);
     rows.push({
       id: `${p.base_date}|${lat.toFixed(4)}|${lon.toFixed(4)}`,
       lat,
@@ -150,6 +150,19 @@ function extractAlertRows(features: FireFeature[]): AlertRow[] {
 type SortKey = "urgency" | "days" | "fire30" | "province" | "prob";
 
 export default function NotifyPage({ predictedAll }: Props) {
+  const { t } = useLang();
+  // Localized labels for templates/channels — overlaid onto the const arrays
+  const tplLabel = (id: string) =>
+    id === "critical" ? t("notify.template.critical.label")
+    : id === "high"   ? t("notify.template.high.label")
+    : id === "summary"? t("notify.template.daily.label")
+    : id;
+  const channelLabel = (id: NotifyChannel) =>
+    id === "all" ? t("notify.channel.all")
+    : id === "sms" ? "SMS"
+    : id === "line" ? "LINE Notify"
+    : id === "email" ? "Email"
+    : String(id);
   const allRows = useMemo(() => extractAlertRows(predictedAll), [predictedAll]);
 
   // ── Filters / sort ──
@@ -379,8 +392,7 @@ export default function NotifyPage({ predictedAll }: Props) {
         <div>
           <h1>🔔 Alert Dispatch</h1>
           <p className="notify-page-subtitle">
-            ส่งการแจ้งเตือนให้ stakeholders เมื่อ cell มีความเสี่ยงสูง.
-            Backend เป็น stub mode — ข้อความถูก queue แต่ไม่ได้ส่งจริง (ต้องเชื่อม SMS/LINE/Email provider)
+            {t("notify.subtitle")} {t("notify.stub_note")}
           </p>
         </div>
       </header>
@@ -408,7 +420,7 @@ export default function NotifyPage({ predictedAll }: Props) {
           onChange={(e) => setUrgencyFilter(e.target.value as UrgencyLevel | "ALL")}
           aria-label="Urgency filter"
         >
-          <option value="ALL">ทุกระดับ</option>
+          <option value="ALL">{t("notify.filter.all_urgency")}</option>
           <option value="CRITICAL">CRITICAL</option>
           <option value="HIGH">HIGH</option>
           <option value="MEDIUM">MEDIUM</option>
@@ -419,18 +431,18 @@ export default function NotifyPage({ predictedAll }: Props) {
           onChange={(e) => setProvinceFilter(e.target.value)}
           aria-label="Province filter"
         >
-          <option value="ALL">ทุกจังหวัด</option>
+          <option value="ALL">{t("notify.filter.all_province")}</option>
           {provinces.map((p) => <option key={p} value={p}>{p}</option>)}
         </select>
         <input
           type="search"
-          placeholder="ค้นหาจังหวัด/พิกัด..."
+          placeholder={t("notify.search.placeholder")}
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           aria-label="Search"
         />
         <div className="alert-filter-summary">
-          {rows.length} / {allRows.length} cells · เลือก {selected.size}
+          {fmtTr(t("notify.counts"), { visible: rows.length, total: allRows.length, selected: selected.size })}
         </div>
       </div>
 
@@ -440,13 +452,13 @@ export default function NotifyPage({ predictedAll }: Props) {
           <div className="empty-icon">🌲</div>
           <div className="empty-title">
             {allRows.length === 0
-              ? "ไม่มี prediction ล่าสุด"
-              : "ไม่มี cell ที่ตรงกับเงื่อนไข"}
+              ? t("notify.empty.no_prediction")
+              : t("notify.empty.no_match")}
           </div>
           <div className="empty-hint">
             {allRows.length === 0
-              ? "รัน ./run.sh --fresh --predict-only เพื่อสร้าง prediction"
-              : "ลองรีเซ็ต filters หรือเปลี่ยน urgency"}
+              ? t("notify.empty.hint.no_prediction")
+              : t("notify.empty.hint.no_match")}
           </div>
         </div>
       ) : (
@@ -530,7 +542,7 @@ export default function NotifyPage({ predictedAll }: Props) {
           </table>
           {rows.length > 500 && (
             <div className="alert-table-overflow">
-              แสดง 500 จาก {rows.length} rows · ใช้ filter เพื่อจำกัด
+              {fmtTr(t("notify.rows_clamped"), { total: rows.length })}
             </div>
           )}
         </div>
@@ -539,20 +551,20 @@ export default function NotifyPage({ predictedAll }: Props) {
       {/* Bulk action bar */}
       {selected.size > 0 && (
         <div className="bulk-action-bar">
-          <span>เลือก <b>{selected.size}</b> cells</span>
+          <span>{fmtTr(t("notify.selected_count"), { n: selected.size })}</span>
           <button
             type="button"
             className="action-btn primary"
             onClick={() => setDrawerOpen(true)}
           >
-            🔔 ส่งแจ้งเตือน ({selected.size})
+            {fmtTr(t("notify.send_button"), { n: selected.size })}
           </button>
           <button
             type="button"
             className="action-btn"
             onClick={() => setSelected(new Set())}
           >
-            ยกเลิก
+            {t("notify.cancel")}
           </button>
         </div>
       )}
@@ -565,7 +577,7 @@ export default function NotifyPage({ predictedAll }: Props) {
         aria-label="Send alert"
       >
         <div className="send-drawer-header">
-          <h2>ส่งการแจ้งเตือน</h2>
+          <h2>{t("notify.drawer.title")}</h2>
           <button
             type="button"
             className="send-drawer-close"
@@ -576,7 +588,7 @@ export default function NotifyPage({ predictedAll }: Props) {
 
         <div className="send-drawer-body">
           <div className="form-group">
-            <label>ช่องทาง</label>
+            <label>{t("notify.drawer.channel")}</label>
             <div className="channel-toggle">
               {CHANNELS.map((c) => (
                 <button
@@ -585,7 +597,7 @@ export default function NotifyPage({ predictedAll }: Props) {
                   className={`channel-btn ${channel === c.id ? "active" : ""}`}
                   onClick={() => setChannel(c.id)}
                 >
-                  <span>{c.emoji}</span> {c.label}
+                  <span>{c.emoji}</span> {channelLabel(c.id)}
                 </button>
               ))}
             </div>
@@ -593,7 +605,7 @@ export default function NotifyPage({ predictedAll }: Props) {
 
           <div className="form-group">
             <label htmlFor="recipients-input">
-              ผู้รับ ({recipients.length}) · พิมพ์ชื่อ/เบอร์ แล้ว Enter
+              {fmtTr(t("notify.drawer.recipients"), { n: recipients.length })}
             </label>
             <div className="recipient-input-wrap">
               {recipients.map((r) => (
@@ -608,29 +620,29 @@ export default function NotifyPage({ predictedAll }: Props) {
                 value={recipientInput}
                 onChange={(e) => setRecipientInput(e.target.value)}
                 onKeyDown={onRecipientKeyDown}
-                placeholder={recipients.length === 0 ? "เช่น +66891234567, agent_a, ..." : ""}
+                placeholder={recipients.length === 0 ? t("notify.drawer.recipients.placeholder") : ""}
               />
             </div>
             {recipients.length === 0 && (
-              <div className="form-hint">ต้องมีอย่างน้อย 1 ผู้รับ</div>
+              <div className="form-hint">{t("notify.drawer.recipients.min")}</div>
             )}
           </div>
 
           <div className="form-group">
-            <label htmlFor="template-select">เทมเพลตข้อความ</label>
+            <label htmlFor="template-select">{t("notify.drawer.template")}</label>
             <select
               id="template-select"
               value={templateId}
               onChange={(e) => setTemplateId(e.target.value)}
             >
-              {TEMPLATES.map((t) => (
-                <option key={t.id} value={t.id}>{t.label}</option>
+              {TEMPLATES.map((tpl) => (
+                <option key={tpl.id} value={tpl.id}>{tplLabel(tpl.id)}</option>
               ))}
             </select>
           </div>
 
           <div className="form-group">
-            <label>ระดับความเร่งด่วน</label>
+            <label>{t("notify.drawer.priority")}</label>
             <div className="priority-group">
               {PRIORITIES.map((p) => (
                 <label
@@ -659,7 +671,7 @@ export default function NotifyPage({ predictedAll }: Props) {
               {previewMessage}
             </div>
             <div className="form-hint">
-              จะส่งไปยัง <b>{recipients.length}</b> ผู้รับ ·{" "}
+              {fmtTr(t("notify.drawer.summary"), { n: recipients.length })}
               {selectedRows.length > 0 ? `${selectedRows.length} zones` : "summary mode"}
             </div>
           </div>
@@ -676,7 +688,7 @@ export default function NotifyPage({ predictedAll }: Props) {
             onClick={() => setDrawerOpen(false)}
             disabled={sending}
           >
-            ยกเลิก
+            {t("notify.drawer.cancel")}
           </button>
           <button
             type="button"
@@ -693,7 +705,7 @@ export default function NotifyPage({ predictedAll }: Props) {
                 priority === "urgent" ? "#f97316" : undefined,
             }}
           >
-            {sending ? "กำลังส่ง..." : "🔔 ส่งการแจ้งเตือน"}
+            {sending ? t("notify.drawer.send.sending") : t("notify.drawer.send.idle")}
           </button>
         </div>
       </div>
@@ -706,15 +718,15 @@ export default function NotifyPage({ predictedAll }: Props) {
         <div className="info-modal-backdrop" role="dialog" aria-modal="true" onClick={() => setConfirmOpen(false)}>
           <div className="info-modal" style={{ maxWidth: 480 }} onClick={(e) => e.stopPropagation()}>
             <div className="info-modal-header">
-              <h2>ยืนยันการส่งการแจ้งเตือน</h2>
+              <h2>{t("notify.confirm.title")}</h2>
               <button className="info-modal-close" onClick={() => setConfirmOpen(false)} aria-label="Close">×</button>
             </div>
             <div className="info-modal-body">
               <div className="info-grid">
-                <div><span>ช่องทาง</span><b>{CHANNELS.find((c) => c.id === channel)?.label}</b></div>
-                <div><span>ผู้รับ</span><b>{recipients.length} คน</b></div>
+                <div><span>{t("notify.confirm.channel")}</span><b>{channelLabel(channel)}</b></div>
+                <div><span>{t("notify.confirm.recipients_count")}</span><b>{fmtTr(t("notify.confirm.recipients_unit"), { n: recipients.length })}</b></div>
                 <div><span>Zones</span><b>{selectedRows.length}</b></div>
-                <div><span>ระดับ</span><b style={{ color: PRIORITIES.find((p) => p.id === priority)?.color }}>{priority.toUpperCase()}</b></div>
+                <div><span>{t("notify.confirm.level")}</span><b style={{ color: PRIORITIES.find((p) => p.id === priority)?.color }}>{priority.toUpperCase()}</b></div>
               </div>
               <h4 style={{ marginTop: 14, marginBottom: 6 }}>Preview</h4>
               <div className="message-preview">{previewMessage}</div>
@@ -729,7 +741,7 @@ export default function NotifyPage({ predictedAll }: Props) {
                   disabled={sending}
                   style={{ flex: 1 }}
                 >
-                  ยกเลิก
+                  {t("notify.confirm.cancel")}
                 </button>
                 <button
                   type="button"
@@ -738,7 +750,7 @@ export default function NotifyPage({ predictedAll }: Props) {
                   disabled={sending}
                   style={{ flex: 2 }}
                 >
-                  {sending ? "กำลังส่ง..." : "ยืนยันส่ง"}
+                  {sending ? t("notify.confirm.sending") : t("notify.confirm.send")}
                 </button>
               </div>
             </div>
@@ -798,21 +810,21 @@ export default function NotifyPage({ predictedAll }: Props) {
             ) : log.length === 0 ? (
               <div className="empty-state" style={{ padding: 20 }}>
                 <div className="empty-icon">📭</div>
-                <div className="empty-title">ยังไม่มีการแจ้งเตือน</div>
-                <div className="empty-hint">เลือก cell แล้วกด Notify → log จะปรากฏที่นี่</div>
+                <div className="empty-title">{t("notify.log.empty.title")}</div>
+                <div className="empty-hint">{t("notify.log.empty.hint")}</div>
               </div>
             ) : (
               <table className="log-table">
                 <thead>
                   <tr>
-                    <th>เวลา</th>
-                    <th>ช่องทาง</th>
-                    <th>ระดับ</th>
-                    <th>ผู้รับ</th>
+                    <th>{t("notify.log.col.time")}</th>
+                    <th>{t("notify.log.col.channel")}</th>
+                    <th>{t("notify.log.col.priority")}</th>
+                    <th>{t("notify.log.col.recipients")}</th>
                     <th>Zones</th>
-                    <th>เทมเพลต</th>
-                    <th>สถานะ</th>
-                    <th>ข้อความ</th>
+                    <th>{t("notify.log.col.template")}</th>
+                    <th>{t("notify.log.col.status")}</th>
+                    <th>{t("notify.log.col.message")}</th>
                   </tr>
                 </thead>
                 <tbody>

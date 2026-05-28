@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { fmtTr, useLang } from "../utils/i18n";
 
 // Light/dark theme toggle. Persists choice in localStorage and respects the
 // user's OS preference on first visit (prefers-color-scheme).
@@ -26,6 +27,7 @@ function apply(theme: Theme) {
 }
 
 export default function ThemeToggle() {
+  const { t } = useLang();
   const [theme, setTheme] = useState<Theme>(detectInitial);
 
   useEffect(() => {
@@ -43,8 +45,8 @@ export default function ThemeToggle() {
       type="button"
       className="theme-toggle"
       onClick={() => setTheme(next)}
-      title={`สลับเป็นธีม ${next === "light" ? "สว่าง" : "มืด"}`}
-      aria-label={`Switch to ${next} theme`}
+      title={fmtTr(t("theme.switch"), { theme: next === "light" ? t("theme.light") : t("theme.dark") })}
+      aria-label={fmtTr(t("theme.switch"), { theme: next === "light" ? t("theme.light") : t("theme.dark") })}
     >
       {theme === "dark" ? "🌙" : "☀️"}
     </button>

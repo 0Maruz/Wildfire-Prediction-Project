@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 fastapi
 uvicorn
 pandas
@@ -16,3 +17,36 @@ rasterio>=1.4
 pyproj>=3.6
 scikit-optimize
 matplotlib
+=======
+# Core API & serving
+fastapi==0.136.1
+uvicorn==0.46.0
+
+# Data & ML
+pandas==3.0.2
+numpy==2.4.4
+joblib==1.5.3
+scikit-learn==1.8.0
+lightgbm==4.6.0
+pyarrow==24.0.0
+
+# Geospatial
+shapely>=2.0,<3.0
+rasterio>=1.4,<2.0
+pyproj>=3.6,<4.0
+
+# HTTP & env
+python-dotenv==1.2.2
+requests==2.33.1
+httpx==0.28.1
+
+# Optional — install for full training features
+# scikit-optimize: Bayesian hyperparameter search (falls back to RandomizedSearchCV)
+# matplotlib + scipy: PNG training report generation
+scikit-optimize==0.10.2
+scipy==1.17.1
+# matplotlib  # uncomment if you want PNG training reports
+
+# Legacy model.py only (not used by active training pipeline)
+# xgboost==3.2.0
+>>>>>>> 293bf707a269c9b4271f675741f72fa58f51c90d

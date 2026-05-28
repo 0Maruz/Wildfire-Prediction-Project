@@ -18,7 +18,7 @@ from typing import Iterable, List, Optional
 import numpy as np
 import pandas as pd
 
-from io_utils import list_tables, read_table, resolve_existing
+from storage import list_tables, read_table, resolve_existing
 from urban_areas import classify_urban
 
 log = logging.getLogger("data_loader")
@@ -46,6 +46,9 @@ AGG_COLUMNS = [
 
 # Names produced by fetch_weather.py — must match features.WEATHER_COLUMNS.
 WEATHER_COLUMNS = ["temp_max", "temp_min", "precip_sum", "wind_max", "et0"]
+
+# Names produced by fetch_radd_alerts.py — must match features.RADD_COLUMNS.
+RADD_COLUMNS = ["radd_alert_count", "radd_confidence_max"]
 
 
 def _coerce_acq_datetime(df: pd.DataFrame) -> pd.DataFrame:
@@ -388,6 +391,53 @@ def merge_weather(daily: pd.DataFrame, weather_path: Optional[str]) -> pd.DataFr
     return merged
 
 
+def merge_radd(daily: pd.DataFrame, radd_path: Optional[str]) -> pd.DataFrame:
+    """Left-join RADD alert aggregates (from fetch_radd_alerts.py) onto the daily frame.
+
+    No-op if radd_path is missing or the file doesn't exist. Cells / dates not
+    in the cache get NaN (treated as 0 in features.py). RADD only covers forest
+    cells and has a ~6–12 day revisit, so most rows will be NaN — that's expected.
+    """
+    actual = resolve_existing(radd_path) if radd_path else None
+    if not actual:
+        return daily
+
+    try:
+        radd = read_table(actual)
+    except Exception as exc:
+        log.warning("Could not read RADD cache (%s): %s — skipping merge.", actual, exc)
+        return daily
+
+    if radd.empty:
+        return daily
+
+    expected = {"lat_grid", "lon_grid", "date", *RADD_COLUMNS}
+    missing = expected - set(radd.columns)
+    if missing:
+        log.warning("RADD cache missing columns %s — skipping merge.", sorted(missing))
+        return daily
+
+    radd["date"] = pd.to_datetime(radd["date"]).dt.date
+    radd["lat_grid"] = radd["lat_grid"].round(6)
+    radd["lon_grid"] = radd["lon_grid"].round(6)
+
+    daily = daily.copy()
+    daily["lat_grid"] = daily["lat_grid"].round(6)
+    daily["lon_grid"] = daily["lon_grid"].round(6)
+
+    merged = daily.merge(
+        radd[["lat_grid", "lon_grid", "date", *RADD_COLUMNS]],
+        on=["lat_grid", "lon_grid", "date"],
+        how="left",
+    )
+    hit = int(merged[RADD_COLUMNS[0]].notna().sum())
+    log.info(
+        "Merged RADD: %d / %d rows have alert data (%.1f%%)",
+        hit, len(merged), 100.0 * hit / max(len(merged), 1),
+    )
+    return merged
+
+
 def load_and_prepare(
     raw_dir: Optional[str],
     firms_path: Optional[str],
@@ -396,6 +446,7 @@ def load_and_prepare(
     densify: bool = True,
     weather_path: Optional[str] = None,
     tree_cover_path: Optional[str] = None,
+    radd_path: Optional[str] = None,
     filter_urban: bool = True,
     urban_buffer_km: float = 0.0,
 ) -> pd.DataFrame:
@@ -435,4 +486,5 @@ def load_and_prepare(
 
     daily = merge_tree_cover(daily, tree_cover_path)
     daily = merge_weather(daily, weather_path)
+    daily = merge_radd(daily, radd_path)
     return daily

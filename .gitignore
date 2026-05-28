@@ -2,6 +2,12 @@
 .env
 .env.local
 
+# Node — only web/ has a real package.json; root-level files are
+# accidental from running npm install in the wrong cwd.
+node_modules/
+/package.json
+/package-lock.json
+
 # Python
 .venv/
 __pycache__/

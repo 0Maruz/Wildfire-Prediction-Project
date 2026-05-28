@@ -5,7 +5,7 @@ import type { AlertPageRoute } from "../types";
 // `#reports` → "reports", default → "dashboard". Updating the route writes
 // to location.hash so browser back/forward + share-link work naturally.
 
-const VALID: AlertPageRoute[] = ["dashboard", "notify", "live", "reports"];
+const VALID: AlertPageRoute[] = ["dashboard", "notify", "live", "reports", "compare"];
 
 export function getRoute(): AlertPageRoute {
   const hash = window.location.hash.replace(/^#\/?/, "").toLowerCase();

@@ -15,7 +15,6 @@ Boundary source: https://github.com/apisit/thailand.json (CC BY 4.0)
 
 from __future__ import annotations
 
-import json
 import os
 from typing import Iterable
 
@@ -24,6 +23,8 @@ from shapely.geometry import Point, shape
 from shapely.ops import unary_union
 from shapely.prepared import prep
 
+from storage import exists, read_json
+
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BOUNDARY_PATH = os.path.join(BASE_DIR, "data", "boundaries", "thailand.geojson")
 
@@ -31,13 +32,12 @@ BOUNDARY_PATH = os.path.join(BASE_DIR, "data", "boundaries", "thailand.geojson")
 def _load_provinces():
     """Return list of (name, geometry) per Thai province from the bundled
     GeoJSON, plus the union of all provinces as the country boundary."""
-    if not os.path.exists(BOUNDARY_PATH):
+    if not exists(BOUNDARY_PATH):
         raise FileNotFoundError(
             f"Thailand boundary GeoJSON not found at {BOUNDARY_PATH}. "
             "Restore from https://github.com/apisit/thailand.json/blob/master/thailand.json"
         )
-    with open(BOUNDARY_PATH, "r", encoding="utf-8") as f:
-        gj = json.load(f)
+    gj = read_json(BOUNDARY_PATH)
     provinces = []
     geoms = []
     for feat in gj["features"]:

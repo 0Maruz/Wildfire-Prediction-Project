@@ -1,7 +1,68 @@
-import { useMemo } from "react";
-import type { FireFeature, ValidationMetrics } from "../types";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { fetchRollingEval } from "../api";
+import {
+  Bar, BarChart, CartesianGrid, Cell, LabelList, Legend, Line, LineChart,
+  PolarAngleAxis, PolarGrid, PolarRadiusAxis, Radar, RadarChart,
+  ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis,
+} from "recharts";
+import type { FireFeature, RollingMonthPoint, ValidationMetrics } from "../types";
+import { chartFilename, downloadChartPng } from "../utils/chartExport";
 import { downloadCsv, downloadMultiSectionCsv } from "../utils/csvExport";
+import { fmtTr, useLang } from "../utils/i18n";
+import ModelTrainingSummary from "./ModelTrainingSummary";
 import StatisticsSection from "./StatisticsSection";
+
+type ChartShape = "bar" | "line";
+
+function ChartToolbar({
+  containerRef, fileStem, getCsvRows, shape, onShapeChange,
+}: {
+  containerRef: React.RefObject<HTMLDivElement>;
+  fileStem: string;
+  getCsvRows?: () => (string | number | null | undefined)[][];
+  shape?: ChartShape;
+  onShapeChange?: (s: ChartShape) => void;
+}) {
+  return (
+    <div className="chart-toolbar">
+      {shape && onShapeChange && (
+        <div className="chart-shape-toggle">
+          <button
+            type="button"
+            className={shape === "bar" ? "active" : ""}
+            onClick={() => onShapeChange("bar")}
+            title="Bar chart"
+          >📊 Bar</button>
+          <button
+            type="button"
+            className={shape === "line" ? "active" : ""}
+            onClick={() => onShapeChange("line")}
+            title="Line chart"
+          >📈 Line</button>
+        </div>
+      )}
+      <button
+        type="button"
+        className="action-btn"
+        onClick={() => {
+          downloadChartPng(containerRef.current, chartFilename(fileStem, "png"))
+            .catch((e) => console.error("PNG export failed:", e));
+        }}
+        title="Download chart as PNG"
+        style={{ padding: "4px 10px", fontSize: 11 }}
+      >🖼️ PNG</button>
+      {getCsvRows && (
+        <button
+          type="button"
+          className="action-btn"
+          onClick={() => downloadCsv(chartFilename(fileStem, "csv"), getCsvRows())}
+          title="Download underlying data as CSV"
+          style={{ padding: "4px 10px", fontSize: 11 }}
+        >📥 CSV</button>
+      )}
+    </div>
+  );
+}
 
 function SmallExportBtn({ filename, getRows }: {
   filename: string;
@@ -45,8 +106,23 @@ const TIER_COLORS: Record<string, string> = {
 };
 
 export default function ReportsPage({ metrics, predictedAll }: Props) {
+  const { t } = useLang();
   // ─── Rolling AUC chart data ───
-  const monthly = metrics?.rolling_by_month ?? [];
+  // Prefer the per-month series baked into geojson metadata. If absent
+  // (rolling_eval.py wasn't run before risk_map.py), fall back to fetching
+  // /api/rolling-eval directly so the dashboard reflects the latest file
+  // on disk without requiring a re-run of risk_map.
+  const inlineMonthly = metrics?.rolling_by_month ?? [];
+  const [fetchedMonthly, setFetchedMonthly] = useState<RollingMonthPoint[]>([]);
+  useEffect(() => {
+    if (inlineMonthly.length > 0) return;
+    let cancelled = false;
+    fetchRollingEval()
+      .then((r) => { if (!cancelled) setFetchedMonthly(r.months ?? []); })
+      .catch(() => { /* endpoint not available or no file — silent */ });
+    return () => { cancelled = true; };
+  }, [inlineMonthly.length]);
+  const monthly = inlineMonthly.length > 0 ? inlineMonthly : fetchedMonthly;
 
   // ─── Top feature importance ───
   // Read from window.__FEATURE_IMPORTANCE__ if available; otherwise fall back
@@ -98,6 +174,46 @@ export default function ReportsPage({ metrics, predictedAll }: Props) {
       .map(([prov, c]) => ({ prov, ...c }))
       .sort((a, b) => (b.CRITICAL + b.HIGH) - (a.CRITICAL + a.HIGH))
       .slice(0, 15);
+  }, [predictedAll]);
+
+  // Chart toolbar refs / shape state — local to ReportsPage; one per chart.
+  const daysChartRef = useRef<HTMLDivElement>(null);
+  const radarChartRef = useRef<HTMLDivElement>(null);
+  const thresholdChartRef = useRef<HTMLDivElement>(null);
+  const [daysShape, setDaysShape] = useState<ChartShape>("bar");
+
+  // ─── Distribution by predicted day (bar chart) ───
+  // Shows the bimodal pattern of a calibrated binary classifier mapped through
+  // the pseudo-days formula. NOT a bug — it's exactly what a healthy
+  // calibrated probability distribution should look like.
+  const daysDistribution = useMemo(() => {
+    const byDate = new Map<string, FireFeature[]>();
+    for (const f of predictedAll) {
+      const bd = f.properties.base_date;
+      if (!bd) continue;
+      if (!byDate.has(bd)) byDate.set(bd, []);
+      byDate.get(bd)!.push(f);
+    }
+    const dates = Array.from(byDate.keys()).sort();
+    const latest = dates[dates.length - 1];
+    if (!latest) return { latest: null, rows: [] as { day: number; count: number; label: string }[] };
+    const buckets = new Map<number, number>();
+    for (const f of byDate.get(latest)!) {
+      const d = f.properties.days_until_fire;
+      if (typeof d !== "number") continue;
+      buckets.set(d, (buckets.get(d) ?? 0) + 1);
+    }
+    const rows: { day: number; count: number; label: string }[] = [];
+    for (let d = 1; d <= 7; d++) {
+      const c = buckets.get(d) ?? 0;
+      const label =
+        d === 1 ? t("sidebar.daypicker.today") :
+        d === 2 ? t("sidebar.daypicker.tomorrow") :
+        d === 3 ? t("sidebar.daypicker.dayafter") :
+        fmtTr(t("sidebar.daypicker.inNdays"), { n: d });
+      rows.push({ day: d, count: c, label });
+    }
+    return { latest, rows };
   }, [predictedAll]);
 
   const sciStats = metrics?.scientific_stats;
@@ -263,9 +379,9 @@ export default function ReportsPage({ metrics, predictedAll }: Props) {
     <div className="reports-page">
       <header className="notify-page-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 16, flexWrap: "wrap" }}>
         <div>
-          <h1>📊 รายงาน · Scientific Analysis</h1>
+          <h1>{t("page.reports.title", "📊 Reports · Scientific Analysis")}</h1>
           <p className="notify-page-subtitle">
-            Held-out test set performance + bootstrap confidence intervals + statistical tests
+            {t("page.reports.subtitle", "Held-out test set performance + bootstrap confidence intervals + statistical tests")}
           </p>
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: 6, alignItems: "flex-end" }}>
@@ -274,32 +390,376 @@ export default function ReportsPage({ metrics, predictedAll }: Props) {
               type="button"
               className="action-btn primary"
               onClick={exportCombined}
-              title="ดาวน์โหลดสถิติทุก section รวมเป็นไฟล์เดียว (ใช้ได้กับ Excel/Google Sheets)"
+              title={t("btn.export.combined")}
             >
-              📄 ไฟล์เดียวรวมทุกสถิติ
+              {t("btn.export.combined", "📄 All metrics in one file")}
             </button>
             <button
               type="button"
               className="action-btn"
               onClick={exportAll}
-              title="ดาวน์โหลด 9 ไฟล์แยก (1 ไฟล์ต่อ section) — เหมาะกับ import เข้า analysis tools แยกตัว"
+              title={t("btn.export.separate")}
             >
-              📂 แยก 9 ไฟล์
+              {t("btn.export.separate", "📂 9 separate files")}
             </button>
           </div>
           <span style={{ fontSize: 10, color: "var(--text-3)" }}>
-            หรือกดปุ่ม 📥 CSV ในแต่ละ section ด้านล่าง
+            {t("section.summary.hint")}
           </span>
         </div>
       </header>
 
-      {/* Scientific stats first — the main "proof" section */}
+      {/* Model Training Summary — top-of-page executive overview from real
+          persisted artifacts. No fabricated numbers. */}
+      <ModelTrainingSummary metrics={metrics} />
+
+      {/* Plain-language summary table — for readers who skip technical sections */}
+      {sciStats && (
+        <section className="report-section">
+          <div className="report-section-head">
+            <h2>{t("section.summary")}</h2>
+            <p className="report-section-hint">{t("section.summary.hint")}</p>
+          </div>
+          <table className="stats-table summary-friendly">
+            <thead>
+              <tr>
+                <th>{t("section.summary.col.aspect")}</th>
+                <th style={{ textAlign: "right" }}>{t("section.summary.col.result")}</th>
+                <th>{t("section.summary.col.meaning")}</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>{t("section.summary.row.recall")}</td>
+                <td className="mono right"><b style={{ color: "#22c55e" }}>{(sciStats.classification_stats.sensitivity * 100).toFixed(0)}%</b></td>
+                <td>{(sciStats.classification_stats.sensitivity * 100).toFixed(0)} / 100</td>
+              </tr>
+              <tr>
+                <td>{t("section.summary.row.fpr")}</td>
+                <td className="mono right"><b style={{ color: "#eab308" }}>{(sciStats.classification_stats.false_positive_rate * 100).toFixed(0)}%</b></td>
+                <td>{(sciStats.classification_stats.false_positive_rate * 100).toFixed(0)} / 100</td>
+              </tr>
+              <tr>
+                <td>{t("section.summary.row.auc")}</td>
+                <td className="mono right"><b style={{ color: "#22c55e" }}>{(sciStats.ci_95.roc_auc.point * 100).toFixed(0)}%</b></td>
+                <td>{(sciStats.ci_95.roc_auc.point * 100).toFixed(0)}% better than random</td>
+              </tr>
+              <tr>
+                <td>{t("section.summary.row.calib")}</td>
+                <td className="mono right"><b style={{ color: "#22c55e" }}>{
+                  sciStats.classification_stats.brier_score < 0.05 ? t("hero.card.calib.status.great")
+                  : sciStats.classification_stats.brier_score < 0.10 ? t("hero.card.calib.status.good")
+                  : t("hero.card.calib.status.ok")
+                }</b></td>
+                <td>± {((sciStats.classification_stats.brier_score) * 100).toFixed(0)}%</td>
+              </tr>
+              <tr>
+                <td>{t("section.summary.row.miss")}</td>
+                <td className="mono right"><b style={{ color: "#ef4444" }}>{(sciStats.classification_stats.false_negative_rate * 100).toFixed(0)}%</b></td>
+                <td>1 / {Math.round(1 / Math.max(sciStats.classification_stats.false_negative_rate, 0.01))}</td>
+              </tr>
+            </tbody>
+          </table>
+        </section>
+      )}
+
+      {/* Friendly confusion matrix — colored cards instead of just numbers */}
+      {sciStats && (
+        <section className="report-section">
+          <div className="report-section-head">
+            <h2>{t("section.confusion")}</h2>
+            <p className="report-section-hint">
+              {fmtTr(t("section.confusion.hint"), {
+                n: (sciStats.confusion_matrix.tn + sciStats.confusion_matrix.fp + sciStats.confusion_matrix.fn + sciStats.confusion_matrix.tp).toLocaleString(),
+              })}
+            </p>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 12 }}>
+            <div style={{ padding: 14, background: "rgba(34, 197, 94, 0.10)", border: "1px solid rgba(34, 197, 94, 0.4)", borderRadius: 8 }}>
+              <div style={{ fontSize: 12, fontWeight: 700, color: "#22c55e", marginBottom: 6 }}>{t("section.confusion.tn")}</div>
+              <div style={{ fontSize: 22, fontWeight: 700 }}>{sciStats.confusion_matrix.tn.toLocaleString()}</div>
+              <div style={{ fontSize: 11, color: "var(--text-3)", marginTop: 4 }}>{t("section.confusion.tn.exp")}</div>
+            </div>
+            <div style={{ padding: 14, background: "rgba(234, 179, 8, 0.10)", border: "1px solid rgba(234, 179, 8, 0.4)", borderRadius: 8 }}>
+              <div style={{ fontSize: 12, fontWeight: 700, color: "#eab308", marginBottom: 6 }}>{t("section.confusion.fp")}</div>
+              <div style={{ fontSize: 22, fontWeight: 700 }}>{sciStats.confusion_matrix.fp.toLocaleString()}</div>
+              <div style={{ fontSize: 11, color: "var(--text-3)", marginTop: 4 }}>{t("section.confusion.fp.exp")}</div>
+            </div>
+            <div style={{ padding: 14, background: "rgba(239, 68, 68, 0.10)", border: "1px solid rgba(239, 68, 68, 0.4)", borderRadius: 8 }}>
+              <div style={{ fontSize: 12, fontWeight: 700, color: "#ef4444", marginBottom: 6 }}>{t("section.confusion.fn")}</div>
+              <div style={{ fontSize: 22, fontWeight: 700 }}>{sciStats.confusion_matrix.fn.toLocaleString()}</div>
+              <div style={{ fontSize: 11, color: "var(--text-3)", marginTop: 4 }}>{t("section.confusion.fn.exp")}</div>
+            </div>
+            <div style={{ padding: 14, background: "rgba(34, 197, 94, 0.10)", border: "1px solid rgba(34, 197, 94, 0.4)", borderRadius: 8 }}>
+              <div style={{ fontSize: 12, fontWeight: 700, color: "#22c55e", marginBottom: 6 }}>{t("section.confusion.tp")}</div>
+              <div style={{ fontSize: 22, fontWeight: 700 }}>{sciStats.confusion_matrix.tp.toLocaleString()}</div>
+              <div style={{ fontSize: 11, color: "var(--text-3)", marginTop: 4 }}>{t("section.confusion.tp.exp")}</div>
+            </div>
+          </div>
+          <p className="report-section-hint" style={{ marginTop: 12 }}>
+            {fmtTr(t("section.confusion.summary"), {
+              recall: (sciStats.classification_stats.sensitivity * 100).toFixed(0),
+              fpr: (sciStats.classification_stats.false_positive_rate * 100).toFixed(0),
+            })}
+          </p>
+        </section>
+      )}
+
+      {/* Radar chart — metric balance overview */}
+      {sciStats && (
+        <section className="report-section">
+          <div className="report-section-head" style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10 }}>
+            <div style={{ flex: 1 }}>
+              <h2>{t("section.radar")}</h2>
+              <p className="report-section-hint">{t("section.radar.hint")}</p>
+            </div>
+            <ChartToolbar
+              containerRef={radarChartRef}
+              fileStem="metrics-radar"
+              getCsvRows={() => {
+                const cs = sciStats.classification_stats;
+                const auc = sciStats.ci_95.roc_auc.point;
+                return [
+                  ["axis", "value", "target"],
+                  ["Recall (sensitivity)", cs.sensitivity, 0.8],
+                  ["Specificity", cs.specificity, 0.8],
+                  ["AUC", auc, 0.8],
+                  ["Precision (PPV)", cs.ppv, 0.8],
+                  ["Calibration (1 - brier*10)", Math.max(0, 1 - cs.brier_score * 10), 0.8],
+                ];
+              }}
+            />
+          </div>
+          {(() => {
+            const cs = sciStats.classification_stats;
+            const auc = sciStats.ci_95.roc_auc.point;
+            const data = [
+              { axis: t("section.radar.axis.recall"),       value: cs.sensitivity, target: 0.8 },
+              { axis: t("section.radar.axis.specificity"),  value: cs.specificity, target: 0.8 },
+              { axis: t("section.radar.axis.auc"),          value: auc,            target: 0.8 },
+              { axis: t("section.radar.axis.precision"),    value: cs.ppv,         target: 0.8 },
+              { axis: t("section.radar.axis.calib"),        value: Math.max(0, 1 - cs.brier_score * 10), target: 0.8 },
+            ];
+            return (
+              <div ref={radarChartRef} style={{ height: 360 }}>
+                <ResponsiveContainer width="100%" height="100%">
+                  <RadarChart data={data} outerRadius="75%">
+                    <PolarGrid stroke="var(--border)" />
+                    <PolarAngleAxis dataKey="axis" tick={{ fill: "var(--text-2)", fontSize: 11 }} />
+                    <PolarRadiusAxis
+                      domain={[0, 1]}
+                      tick={{ fill: "var(--text-3)", fontSize: 10 }}
+                      tickFormatter={(v) => `${Math.round(v * 100)}%`}
+                      angle={90}
+                    />
+                    <Radar
+                      name={t("section.radar.legend.current")}
+                      dataKey="value"
+                      stroke="var(--accent)"
+                      fill="var(--accent)"
+                      fillOpacity={0.25}
+                      strokeWidth={2}
+                    />
+                    <Radar
+                      name={t("section.radar.legend.target")}
+                      dataKey="target"
+                      stroke="var(--text-3)"
+                      fill="transparent"
+                      strokeWidth={1}
+                      strokeDasharray="4 4"
+                    />
+                    <Legend
+                      wrapperStyle={{ fontSize: 11, color: "var(--text-2)" }}
+                    />
+                    <Tooltip
+                      contentStyle={{
+                        background: "var(--surface)",
+                        border: "1px solid var(--border)",
+                        borderRadius: 6,
+                        fontSize: 12,
+                      }}
+                      formatter={(value) => {
+                        const n = typeof value === "number" ? value : Number(value);
+                        return Number.isFinite(n) ? `${(n * 100).toFixed(1)}%` : String(value);
+                      }}
+                    />
+                  </RadarChart>
+                </ResponsiveContainer>
+              </div>
+            );
+          })()}
+        </section>
+      )}
+
+      {/* Threshold analysis — P/R/F1 vs threshold to help operator pick */}
+      {sciStats && sciStats.pr_curve && sciStats.pr_curve.length > 0 && (
+        <section className="report-section">
+          <div className="report-section-head" style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10 }}>
+            <div style={{ flex: 1 }}>
+              <h2>{t("section.threshold")}</h2>
+              <p className="report-section-hint">{t("section.threshold.hint")}</p>
+            </div>
+            <ChartToolbar
+              containerRef={thresholdChartRef}
+              fileStem="threshold-analysis"
+              getCsvRows={() => {
+                const rows: (string | number)[][] = [["threshold", "precision", "recall", "f1"]];
+                for (const p of sciStats.pr_curve) {
+                  if (p.t == null) continue;
+                  const f1 = (p.x + p.y) > 0 ? (2 * p.x * p.y) / (p.x + p.y) : 0;
+                  rows.push([p.t, p.y, p.x, f1]);
+                }
+                return rows;
+              }}
+            />
+          </div>
+          {(() => {
+            const rows = sciStats.pr_curve
+              .filter((p) => p.t != null && p.t >= 0 && p.t <= 1)
+              .map((p) => {
+                const f1 = (p.x + p.y) > 0 ? (2 * p.x * p.y) / (p.x + p.y) : 0;
+                return { threshold: p.t as number, precision: p.y, recall: p.x, f1 };
+              })
+              .sort((a, b) => a.threshold - b.threshold);
+            return (
+              <div ref={thresholdChartRef} style={{ height: 320 }}>
+                <ResponsiveContainer width="100%" height="100%">
+                  <LineChart data={rows} margin={{ top: 16, right: 24, bottom: 32, left: 0 }}>
+                    <CartesianGrid stroke="var(--border-soft)" strokeDasharray="3 3" />
+                    <XAxis
+                      dataKey="threshold"
+                      type="number"
+                      domain={[0, 1]}
+                      ticks={[0, 0.05, 0.1, 0.2, 0.4, 0.6, 0.8, 1]}
+                      tick={{ fill: "var(--text-3)", fontSize: 11 }}
+                      label={{ value: "Threshold", position: "insideBottom", offset: -8, style: { fill: "var(--text-3)", fontSize: 11 } }}
+                    />
+                    <YAxis
+                      domain={[0, 1]}
+                      tickFormatter={(v) => `${Math.round(v * 100)}%`}
+                      tick={{ fill: "var(--text-3)", fontSize: 11 }}
+                    />
+                    <ReferenceLine
+                      x={0.05}
+                      stroke="#eab308"
+                      strokeDasharray="4 4"
+                      label={{ value: t("section.threshold.deploy"), fill: "#eab308", fontSize: 10, position: "insideTopRight" }}
+                    />
+                    <Tooltip
+                      contentStyle={{
+                        background: "var(--surface)",
+                        border: "1px solid var(--border)",
+                        borderRadius: 6,
+                        fontSize: 12,
+                        color: "var(--text)",
+                      }}
+                      formatter={(value, name) => {
+                        const n = typeof value === "number" ? value : Number(value);
+                        return [Number.isFinite(n) ? `${(n * 100).toFixed(1)}%` : String(value), name];
+                      }}
+                      labelFormatter={(label) => `Threshold: ${Number(label).toFixed(3)}`}
+                    />
+                    <Legend wrapperStyle={{ fontSize: 11, color: "var(--text-2)", paddingTop: 8 }} />
+                    <Line type="monotone" dataKey="precision" name="Precision" stroke="#22c55e" strokeWidth={2} dot={false} />
+                    <Line type="monotone" dataKey="recall" name="Recall" stroke="#3b82f6" strokeWidth={2} dot={false} />
+                    <Line type="monotone" dataKey="f1" name="F1" stroke="var(--accent)" strokeWidth={2} dot={false} />
+                  </LineChart>
+                </ResponsiveContainer>
+              </div>
+            );
+          })()}
+          <div style={{ marginTop: 10, fontSize: 12, color: "var(--text-2)", lineHeight: 1.55 }}>
+            {t("section.threshold.advice")}
+          </div>
+        </section>
+      )}
+
+      {/* Distribution by predicted day — bar chart with bimodal explanation */}
+      {daysDistribution.rows.some((r) => r.count > 0) && (
+        <section className="report-section">
+          <div className="report-section-head" style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10 }}>
+            <div style={{ flex: 1 }}>
+              <h2>{t("section.distribution")} — {fmtTr(t("section.distribution.snapshot"), { date: daysDistribution.latest ?? "" })}</h2>
+              <p className="report-section-hint">{t("section.distribution.hint")}</p>
+            </div>
+            <ChartToolbar
+              containerRef={daysChartRef}
+              fileStem="fires-by-day"
+              shape={daysShape}
+              onShapeChange={setDaysShape}
+              getCsvRows={() => [
+                ["day_offset", "label", "count"],
+                ...daysDistribution.rows.map((r) => [r.day, r.label, r.count]),
+              ]}
+            />
+          </div>
+          <div ref={daysChartRef} style={{ height: 280 }}>
+            <ResponsiveContainer width="100%" height="100%">
+              {daysShape === "bar" ? (
+                <BarChart data={daysDistribution.rows} margin={{ top: 24, right: 16, bottom: 8, left: 0 }}>
+                  <CartesianGrid stroke="var(--border-soft)" strokeDasharray="3 3" vertical={false} />
+                  <XAxis dataKey="label" tick={{ fill: "var(--text-3)", fontSize: 11 }} axisLine={{ stroke: "var(--border)" }} tickLine={false} />
+                  <YAxis tick={{ fill: "var(--text-3)", fontSize: 11 }} axisLine={{ stroke: "var(--border)" }} tickLine={false}
+                    label={{ value: t("section.distribution.yaxis"), angle: -90, position: "insideLeft", offset: 16, style: { fill: "var(--text-3)", fontSize: 11 } }} />
+                  <Tooltip
+                    cursor={{ fill: "rgba(255, 107, 53, 0.08)" }}
+                    contentStyle={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 6, fontSize: 12, color: "var(--text)" }}
+                    formatter={(value) => [`${value} ${t("section.distribution.tooltip.count")}`, ""]}
+                    labelFormatter={(label, payload) => {
+                      const row = payload?.[0]?.payload as { day: number } | undefined;
+                      return row ? fmtTr(t("section.distribution.tooltip.label"), { label: String(label), n: row.day, plural: row.day === 1 ? "" : "s" }) : String(label);
+                    }}
+                  />
+                  <Bar dataKey="count" radius={[6, 6, 0, 0]}>
+                    {daysDistribution.rows.map((r) => (
+                      <Cell key={r.day} fill={
+                        r.day <= 2 ? "#ef4444" :
+                        r.day === 3 ? "#ff6b35" :
+                        r.day <= 5 ? "#eab308" : "#22c55e"
+                      } />
+                    ))}
+                    <LabelList dataKey="count" position="top"
+                      style={{ fill: "var(--text)", fontSize: 11, fontWeight: 600 }}
+                      formatter={(v) => {
+                        const n = typeof v === "number" ? v : Number(v);
+                        return Number.isFinite(n) && n > 0 ? String(n) : "";
+                      }}
+                    />
+                  </Bar>
+                </BarChart>
+              ) : (
+                <LineChart data={daysDistribution.rows} margin={{ top: 24, right: 16, bottom: 8, left: 0 }}>
+                  <CartesianGrid stroke="var(--border-soft)" strokeDasharray="3 3" />
+                  <XAxis dataKey="label" tick={{ fill: "var(--text-3)", fontSize: 11 }} axisLine={{ stroke: "var(--border)" }} tickLine={false} />
+                  <YAxis tick={{ fill: "var(--text-3)", fontSize: 11 }} axisLine={{ stroke: "var(--border)" }} tickLine={false}
+                    label={{ value: t("section.distribution.yaxis"), angle: -90, position: "insideLeft", offset: 16, style: { fill: "var(--text-3)", fontSize: 11 } }} />
+                  <Tooltip
+                    contentStyle={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 6, fontSize: 12, color: "var(--text)" }}
+                    formatter={(value) => [`${value} ${t("section.distribution.tooltip.count")}`, ""]}
+                  />
+                  <Line type="monotone" dataKey="count" stroke="var(--accent)" strokeWidth={2.5} dot={{ r: 5, fill: "var(--accent)" }} />
+                </LineChart>
+              )}
+            </ResponsiveContainer>
+          </div>
+          <div style={{
+            marginTop: 10, padding: "10px 14px",
+            background: "rgba(59, 130, 246, 0.08)",
+            border: "1px solid rgba(59, 130, 246, 0.25)",
+            borderRadius: 6, fontSize: 12, color: "var(--text-2)", lineHeight: 1.6,
+          }}>
+            {t("section.distribution.bimodal")}
+          </div>
+        </section>
+      )}
+
+      {/* Scientific stats — technical section */}
       {sciStats ? (
         <StatisticsSection stats={sciStats} />
       ) : (
         <section className="report-section">
           <p style={{ color: "var(--text-3)" }}>
-            ยังไม่มี scientific stats · รัน <code style={{ background: "var(--surface-2)", padding: "1px 4px", borderRadius: 3 }}>.venv/bin/python scripts/scientific_stats.py</code> เพื่อสร้าง
+            {fmtTr(t("section.no_scistats"), { cmd: ".venv/bin/python scripts/scientific_stats.py" })}
           </p>
         </section>
       )}
@@ -308,10 +768,8 @@ export default function ReportsPage({ metrics, predictedAll }: Props) {
       <section className="report-section">
         <div className="report-section-head" style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10 }}>
           <div style={{ flex: 1 }}>
-            <h2>📈 Model stability — Rolling AUC ตลอด {monthly.length} เดือน</h2>
-            <p className="report-section-hint">
-              แต่ละจุด = AUC ของโมเดลใน 1 เดือน · เส้นแดงทแยง = baseline 0.5 (สุ่ม)
-            </p>
+            <h2>{t("section.stability")} · {monthly.length}</h2>
+            <p className="report-section-hint">{t("section.stability.dot")}</p>
           </div>
           {monthly.length > 0 && (
             <SmallExportBtn
@@ -326,7 +784,7 @@ export default function ReportsPage({ metrics, predictedAll }: Props) {
         {monthly.length > 0 ? (
           <RollingAucChart data={monthly} />
         ) : (
-          <EmptyReport msg="ยังไม่มีข้อมูล rolling eval — รัน scripts/rolling_eval.py" />
+          <EmptyReport msg={t("section.stability.empty")} />
         )}
         {metrics?.stability_auc_mean != null && (
           <div className="report-stats-grid">
@@ -342,10 +800,8 @@ export default function ReportsPage({ metrics, predictedAll }: Props) {
       <section className="report-section">
         <div className="report-section-head" style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10 }}>
           <div style={{ flex: 1 }}>
-            <h2>🌿 Feature importance — top {Math.min(featureImportance.length, 20)}</h2>
-            <p className="report-section-hint">
-              Features ที่โมเดล LightGBM ใช้บ่อยที่สุดในการ split — บอกว่าตัวไหนสำคัญ
-            </p>
+            <h2>{t("section.features")} — top {Math.min(featureImportance.length, 20)}</h2>
+            <p className="report-section-hint">{t("section.features.hint")}</p>
           </div>
           {featureImportance.length > 0 && (
             <SmallExportBtn
@@ -360,7 +816,7 @@ export default function ReportsPage({ metrics, predictedAll }: Props) {
         {featureImportance.length > 0 ? (
           <FeatureImportanceChart data={featureImportance} />
         ) : (
-          <EmptyReport msg="ยังไม่มี feature importance ใน metadata.metrics — เทรนใหม่ครั้งหน้าจะรวมให้" />
+          <EmptyReport msg={t("section.features.empty")} />
         )}
       </section>
 
@@ -368,10 +824,8 @@ export default function ReportsPage({ metrics, predictedAll }: Props) {
       <section className="report-section">
         <div className="report-section-head" style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10 }}>
           <div style={{ flex: 1 }}>
-            <h2>🇹🇭 Cells ต่อจังหวัด — top 15 (snapshot ล่าสุด)</h2>
-            <p className="report-section-hint">
-              จำนวน cells ที่ถูก flag ในแต่ละจังหวัด · stacked โดย urgency
-            </p>
+            <h2>{t("section.provinces.title")}</h2>
+            <p className="report-section-hint">{t("section.provinces.hint")}</p>
           </div>
           {provinces.length > 0 && (
             <SmallExportBtn
@@ -386,7 +840,7 @@ export default function ReportsPage({ metrics, predictedAll }: Props) {
         {provinces.length > 0 ? (
           <ProvinceChart data={provinces} />
         ) : (
-          <EmptyReport msg="ไม่มี prediction ล่าสุด — รัน risk_map.py" />
+          <EmptyReport msg={t("section.provinces.empty")} />
         )}
       </section>
 

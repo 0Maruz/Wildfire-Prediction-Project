@@ -172,7 +172,18 @@ fi
 # ── Stage 3: full train OR predict-only refresh (features + risk map) ───
 if [[ $PREDICT_ONLY -eq 1 ]]; then
   echo "→ predict-only: refresh features + risk map (no model tuning) …"
-  (cd src && python train.py --predict-only "${TRAIN_ARGS[@]}")
+  # Memory guard: feature engineering on the full 4.4M-row densified frame
+  # peaks ~18 GB in pandas, which OOM-kills predict-only on a 22 GB laptop
+  # with a browser/IDE open. Default the predict window to the last 180 days
+  # (~1.6 M rows, peak ~7 GB) unless the user explicitly overrode it.
+  EXTRA_TRAIN_ARGS=()
+  if ! printf '%s\n' "${TRAIN_ARGS[@]}" | grep -q -- "--max-history-days"; then
+    if [[ -z "${MAX_TRAIN_HISTORY_DAYS:-}" || "${MAX_TRAIN_HISTORY_DAYS:-0}" == "0" ]]; then
+      EXTRA_TRAIN_ARGS+=("--max-history-days" "180")
+      echo "   (memory guard: --max-history-days 180  · override with --max-history-days N)"
+    fi
+  fi
+  (cd src && python train.py --predict-only "${EXTRA_TRAIN_ARGS[@]}" "${TRAIN_ARGS[@]}")
 elif [[ $DO_TRAIN -eq 1 ]]; then
   echo "→ Training on real FIRMS data (+ ERA5 weather if cached) …"
   (cd src && python train.py "${TRAIN_ARGS[@]}")
@@ -235,4 +246,4 @@ cat <<EOF
 EOF
 
 # Foreground FastAPI — Ctrl+C tears down the HTTP server via the trap.
-(cd src && exec uvicorn api:app --host 0.0.0.0 --port "${API_PORT}")
+(cd src && exec python -m uvicorn api:app --host 0.0.0.0 --port "${API_PORT}")

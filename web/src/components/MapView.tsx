@@ -15,6 +15,8 @@ import type {
 } from "../types";
 import { createHeatmapLayer } from "../utils/heatmap";
 import { LIVE_FIRE_COLOR } from "../utils/gistda";
+import { fmtTr, useLang } from "../utils/i18n";
+import { readProbability } from "../utils/probability";
 import {
   AnchoredCircle,
   clampPxForFrac,
@@ -22,6 +24,8 @@ import {
   dotRadiusMeters,
   gridSizeMeters,
 } from "../utils/markers";
+
+type Translator = (key: string, fallback?: string) => string;
 
 interface MapViewProps {
   observed: FireFeature[];
@@ -39,6 +43,7 @@ const LAYER_ORDER = ["heatmap", "observed", "predicted", "livefire"] as const;
 type LayerKey = (typeof LAYER_ORDER)[number];
 
 export default function MapView(props: MapViewProps) {
+  const { t } = useLang();
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<L.Map | null>(null);
   const layersRef = useRef<Record<LayerKey, L.Layer | null>>({
@@ -124,7 +129,7 @@ export default function MapView(props: MapViewProps) {
         props.options.heatRadius
       );
       if (props.options.showCellPins) {
-        layersRef.current.predicted = buildPredictedLayer(map, props.predictedVisible, gridM);
+        layersRef.current.predicted = buildPredictedLayer(map, props.predictedVisible, gridM, t);
       }
     }
 
@@ -144,6 +149,7 @@ export default function MapView(props: MapViewProps) {
     props.options.showLiveFires,
     props.options.heatRadius,
     gridM,
+    t,
   ]);
 
   return <div id="map" ref={containerRef} />;
@@ -200,8 +206,8 @@ function buildObservedLayer(map: L.Map, features: FireFeature[]): L.Layer {
       renderer,
       fillColor: "#ff5722",
       color: "#fff",
-      weight: 1,
-      fillOpacity: 0.8,
+      weight: 0.4,
+      fillOpacity: 0.55,
     }) as AnchoredCircle;
     marker._baseRadiusM = baseM;
     marker._minPx = px.min;
@@ -220,7 +226,7 @@ function buildObservedLayer(map: L.Map, features: FireFeature[]): L.Layer {
   return layer as unknown as L.Layer;
 }
 
-function buildPredictedLayer(map: L.Map, features: FireFeature[], gridM: number): L.Layer {
+function buildPredictedLayer(map: L.Map, features: FireFeature[], gridM: number, t: Translator): L.Layer {
   const layer = L.layerGroup();
   const renderer = L.canvas({ padding: 0.5 });
 
@@ -239,8 +245,8 @@ function buildPredictedLayer(map: L.Map, features: FireFeature[], gridM: number)
       renderer,
       fillColor: color,
       color: "#fff",
-      weight: 1,
-      fillOpacity: 0.85,
+      weight: 0.4,
+      fillOpacity: 0.6,
     }) as AnchoredCircle;
     marker._baseRadiusM = baseM;
     marker._minPx = px.min;
@@ -249,38 +255,27 @@ function buildPredictedLayer(map: L.Map, features: FireFeature[], gridM: number)
 
     const fireDate = p.predicted_fire_date ?? "—";
     const daysUntil = p.days_until_fire ?? 0;
-    // raw_prediction is pseudo-days from the binary classifier:
-    //   days = 1 + (1 - prob) * 6   (see train.py _prob_to_days_for_compat)
-    // Invert to recover the operationally-meaningful probability.
-    //   prob = 1 - (days - 1) / 6   clipped to [0, 1]
-    const rawPred = p.raw_prediction;
-    let probability: number | null = null;
-    if (typeof rawPred === "number" && isFinite(rawPred)) {
-      probability = Math.max(0, Math.min(1, 1 - (rawPred - 1) / 6));
-    }
+    // Prefer the persisted `probability` field (new snapshots) and fall
+    // back to inverting raw_prediction (legacy snapshots).
+    const probability = readProbability(p);
     const histCount = p.historical_fire_count_30d;
 
-    // Risk-tier headline label (Thai) per urgency. Maps the calibrated
-    // urgency tier to operator-language so the popup reads at a glance.
-    const urgencyTh: Record<UrgencyLevel, string> = {
-      CRITICAL: "🔴 เสี่ยงสูงมาก",
-      HIGH:     "🟠 เสี่ยงสูง",
-      MEDIUM:   "🟡 เสี่ยงปานกลาง",
-      LOW:      "🟢 เสี่ยงต่ำ",
-      NONE:     "⚪ ไม่ระบุ",
+    const urgencyMap: Record<UrgencyLevel, string> = {
+      CRITICAL: t("map.urgency.critical"),
+      HIGH:     t("map.urgency.high"),
+      MEDIUM:   t("map.urgency.medium"),
+      LOW:      t("map.urgency.low"),
+      NONE:     t("map.urgency.none"),
     };
-    const urgencyLabel = urgencyTh[urgency];
+    const urgencyLabel = urgencyMap[urgency];
 
-    // Probability tier paraphrase — bind the % to ground-truth intuition.
-    // Calibration is rough (model is not calibrated probability-wise) but
-    // gives the operator a feel for what the number means in practice.
     let probInterpretation = "";
     if (probability !== null) {
-      if (probability >= 0.7)       probInterpretation = "≈ ใน 10 cell ระดับนี้ ~7+ เกิดไฟใน 3 วัน";
-      else if (probability >= 0.5)  probInterpretation = "≈ ใน 10 cell ระดับนี้ ~5 เกิดไฟใน 3 วัน";
-      else if (probability >= 0.35) probInterpretation = "≈ ใน 10 cell ระดับนี้ ~3 เกิดไฟใน 3 วัน";
-      else if (probability >= 0.2)  probInterpretation = "≈ ใน 10 cell ระดับนี้ ~2 เกิดไฟใน 3 วัน";
-      else                          probInterpretation = "≈ ใน 10 cell ระดับนี้ &lt;1 เกิดไฟใน 3 วัน";
+      if (probability >= 0.7)       probInterpretation = t("map.prob.interp.veryhigh");
+      else if (probability >= 0.5)  probInterpretation = t("map.prob.interp.high");
+      else if (probability >= 0.35) probInterpretation = t("map.prob.interp.medium");
+      else if (probability >= 0.2)  probInterpretation = t("map.prob.interp.low");
+      else                          probInterpretation = t("map.prob.interp.verylow");
     }
 
     const probPct = probability !== null ? Math.round(probability * 100) : null;
@@ -294,7 +289,7 @@ function buildPredictedLayer(map: L.Map, features: FireFeature[], gridM: number)
     if (probPct !== null) {
       html +=
         `<div style="margin:6px 0;">
-           <div style="font-size:11px; color:#9aa0aa;">โอกาสเกิดไฟใน 3 วัน</div>
+           <div style="font-size:11px; color:#9aa0aa;">${t("map.prob.title")}</div>
            <div style="font-size:26px; font-weight:700; line-height:1;">${probPct}%</div>
            <div style="margin-top:4px; height:6px; background:#22272e; border-radius:3px; overflow:hidden;">
              <div style="height:100%; width:${barPct}%; background:${color};"></div>
@@ -308,17 +303,70 @@ function buildPredictedLayer(map: L.Map, features: FireFeature[], gridM: number)
            <small>In ${daysUntil} day${daysUntil !== 1 ? "s" : ""}</small>
          </div>`;
     }
-    html += `<small>ทำนายวันที่: <b>${fireDate}</b></small><br>`;
+    html += `<small>${t("map.popup.predicted_date")}: <b>${fireDate}</b></small><br>`;
     if (histCount != null)
-      html += `<small>ไฟใน 30 วันที่ผ่านมา (FIRMS): <b>${histCount}</b></small><br>`;
+      html += `<small>${t("map.popup.fires_30d")}: <b>${histCount}</b></small><br>`;
     if (p.fire_days_per_year != null)
-      html += `<small>อัตราเกิดไฟ: <b>${Number(p.fire_days_per_year).toFixed(1)}</b> วัน/ปี</small><br>`;
+      html += `<small><b>${Number(p.fire_days_per_year).toFixed(1)}</b> ${t("map.popup.fires_per_year")}</small><br>`;
     if (p.nearest_urban_area && p.nearest_urban_distance_km != null) {
       const km = Number(p.nearest_urban_distance_km).toFixed(1);
-      html += `<small>เมืองใกล้สุด: ${p.nearest_urban_area} (${km} km)</small><br>`;
+      html += `<small>${t("map.popup.nearest_city")}: ${p.nearest_urban_area} (${km} km)</small><br>`;
     }
-    html += `<small>พิกัด: ${lat.toFixed(3)}°, ${lon.toFixed(3)}°</small></div>`;
+    html += `<small>${t("map.popup.coords")}: ${lat.toFixed(3)}°, ${lon.toFixed(3)}°</small>`;
+    const weatherSlotId = `wx-${lat.toFixed(4)}-${lon.toFixed(4)}-${(p.base_date || "").replace(/-/g, "")}`;
+    html +=
+      `<hr style="border:0;border-top:1px dashed var(--border,#24252a);margin:6px 0">
+       <div id="${weatherSlotId}" class="popup-weather-slot">
+         <small style="color:#9aa0aa">${t("map.weather.loading")}</small>
+       </div>`;
+    html += `</div>`;
     marker.bindPopup(html);
+
+    // Fetch + inject weather when popup opens (lazy).
+    marker.on("popupopen", () => {
+      const slot = document.getElementById(weatherSlotId);
+      if (!slot || slot.dataset.loaded === "true") return;
+      slot.dataset.loaded = "true";
+      const targetDate = p.predicted_fire_date || p.base_date || undefined;
+      import("../api").then(({ fetchCellWeather }) => fetchCellWeather(lat, lon, targetDate))
+        .then((w) => {
+          if (!w.available) {
+            slot.innerHTML = `<small style="color:#9aa0aa">${fmtTr(t("map.weather.unavailable"), { reason: w.reason ?? "" })}</small>`;
+            return;
+          }
+          const fwi = w.fire_weather_index ?? { level: "—", color: "#9aa0aa", emoji: "❔" };
+          const tmin = w.temp_min_c ?? 0;
+          const tmax = w.temp_max_c ?? 0;
+          const p7 = w.precip_7d_mm ?? 0;
+          const tempBar =
+            `<svg width="160" height="14" style="border-radius:7px;display:block;margin-top:3px">
+               <defs><linearGradient id="tg-${weatherSlotId}" x1="0" x2="1">
+                 <stop offset="0%" stop-color="#3b82f6"/>
+                 <stop offset="50%" stop-color="#eab308"/>
+                 <stop offset="100%" stop-color="#ef4444"/>
+               </linearGradient></defs>
+               <rect width="160" height="14" fill="url(#tg-${weatherSlotId})" rx="7"/>
+               <line x1="${Math.max(2, ((tmin - 15) / 30) * 160)}" y1="0" x2="${Math.max(2, ((tmin - 15) / 30) * 160)}" y2="14" stroke="#fff" stroke-width="2"/>
+               <line x1="${Math.min(158, ((tmax - 15) / 30) * 160)}" y1="0" x2="${Math.min(158, ((tmax - 15) / 30) * 160)}" y2="14" stroke="#fff" stroke-width="2"/>
+             </svg>`;
+          slot.innerHTML =
+            `<div style="font-size:11px;color:#9aa0aa;margin-bottom:2px">${fmtTr(t("map.weather.title"), { date: w.date })}</div>
+             <div style="display:flex;align-items:baseline;gap:6px">
+               <small>${t("map.weather.temp")}</small>
+               <b>${tmin.toFixed(0)}°C – ${tmax.toFixed(0)}°C</b>
+             </div>
+             ${tempBar}
+             <div style="margin-top:5px"><small>${fmtTr(t("map.weather.rain7d"), { value: p7.toFixed(1) })}</small></div>
+             ${w.wind_max_kmh != null ? `<div><small>${fmtTr(t("map.weather.wind"), { value: w.wind_max_kmh.toFixed(1) })}</small></div>` : ""}
+             <div style="margin-top:6px;display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:999px;background:${fwi.color}22;color:${fwi.color};border:1px solid ${fwi.color}66;font-size:11px;font-weight:700">
+               ${fmtTr(t("map.weather.fwi"), { emoji: fwi.emoji, level: fwi.level })}
+             </div>`;
+        })
+        .catch(() => {
+          slot.innerHTML = `<small style="color:#9aa0aa">${t("map.weather.error")}</small>`;
+        });
+    });
+
     layer.addLayer(marker);
   }
   return layer;
@@ -345,8 +393,8 @@ function buildLiveFireLayer(map: L.Map, features: GistdaFeature[], gridM: number
       renderer,
       fillColor: LIVE_FIRE_COLOR,
       color: "#fff",
-      weight: 1,
-      fillOpacity: 0.88,
+      weight: 0.4,
+      fillOpacity: 0.7,
     }) as AnchoredCircle;
     marker._baseRadiusM = baseM;
     marker._minPx = px.min;
@@ -378,3 +426,4 @@ function buildLiveFireLayer(map: L.Map, features: GistdaFeature[], gridM: number
   }
   return layer;
 }
+

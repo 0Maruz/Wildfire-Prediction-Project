@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { fetchHealth, type LiveStatus } from "../api";
+import { useLang } from "../utils/i18n";
 
 // Header badge showing real-time API health. Polls /health every 60s with a
 // 4-second timeout — if the backend doesn't respond we degrade to "offline"
@@ -11,6 +12,7 @@ import { fetchHealth, type LiveStatus } from "../api";
 const POLL_INTERVAL_MS = 60_000;
 
 export default function LiveStatusBadge() {
+  const { t } = useLang();
   const [status, setStatus] = useState<LiveStatus>("offline");
   const [lastCheck, setLastCheck] = useState<Date | null>(null);
 
@@ -34,9 +36,9 @@ export default function LiveStatusBadge() {
     status === "live" ? "LIVE" :
     status === "stale" ? "STALE" : "OFFLINE";
   const description =
-    status === "live" ? "API ตอบรับ + ข้อมูลสด" :
-    status === "stale" ? "API ตอบรับ แต่ข้อมูลเก่าเกิน 5 วัน" :
-    "ติดต่อ API ไม่ได้";
+    status === "live" ? t("livestatus.live") :
+    status === "stale" ? t("livestatus.stale") :
+    t("livestatus.offline");
 
   return (
     <div

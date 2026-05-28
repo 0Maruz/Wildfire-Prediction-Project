@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { fetchGeoJson } from "./api";
 import AlertSettings from "./components/AlertSettings";
 import AlertToasts from "./components/AlertToasts";
+import ComparePage from "./components/ComparePage";
+import HotspotAnalyticsPage from "./components/HotspotAnalyticsPage";
 import InfoModal from "./components/InfoModal";
 import LiveFiresPage from "./components/LiveFiresPage";
 import LiveStatusBadge from "./components/LiveStatusBadge";
@@ -11,8 +13,10 @@ import NotifyPage from "./components/NotifyPage";
 import ReportsPage from "./components/ReportsPage";
 import Sidebar from "./components/Sidebar";
 import ThemeToggle from "./components/ThemeToggle";
+import WelcomeBanner from "./components/WelcomeBanner";
 import { useFireAlerts, useFireSseStream } from "./utils/fireAlerts";
 import { useHashRoute } from "./utils/hashRoute";
+import { usePersistedState } from "./utils/usePersistedState";
 import type {
   AlertPageRoute,
   DaySelection,
@@ -24,6 +28,9 @@ import type {
 import { exportCellsCsv } from "./utils/csv";
 import { dateAdd } from "./utils/dates";
 import { fetchLiveFires, LIVE_REFRESH_MS } from "./utils/gistda";
+import { isInThailandBbox } from "./constants";
+import LanguageToggle from "./components/LanguageToggle";
+import { fmtTr, LanguageContext, makeT, useLang, type LangCtx as LangCtxValue, type Lang } from "./utils/i18n";
 
 const DEFAULT_OPTIONS: DisplayOptions = {
   showObserved: false,
@@ -40,6 +47,20 @@ const DEFAULT_OPTIONS: DisplayOptions = {
 };
 
 export default function App() {
+  const [lang, setLang] = usePersistedState<Lang>("firewatch:lang", "en");
+  const langCtx = useMemo<LangCtxValue>(() => ({
+    lang, setLang, t: makeT(lang),
+  }), [lang, setLang]);
+
+  return (
+    <LanguageContext.Provider value={langCtx}>
+      <AppInner />
+    </LanguageContext.Provider>
+  );
+}
+
+function AppInner() {
+  const { t } = useLang();
   const [geojson, setGeojson] = useState<FireGeoJson | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -65,6 +86,26 @@ export default function App() {
   const [alertSettingsOpen, setAlertSettingsOpen] = useState(false);
   // Mobile sidebar drawer (desktop ignores this — sidebar always visible)
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  // Desktop sidebar collapse — persists across visits via localStorage so a
+  // returning user keeps the layout they chose. Mobile uses sidebarOpen instead.
+  const [sidebarCollapsed, setSidebarCollapsed] = usePersistedState<boolean>(
+    "firewatch.sidebarCollapsed", false,
+  );
+  // Ctrl/Cmd+B toggles desktop sidebar collapse (VS Code convention)
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "b") {
+        e.preventDefault();
+        if (window.innerWidth >= 768) {
+          setSidebarCollapsed((v) => !v);
+        } else {
+          setSidebarOpen((v) => !v);
+        }
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [setSidebarCollapsed]);
 
   // Hash-based routing between Dashboard / Notify / Reports
   const [route, navigate] = useHashRoute();
@@ -95,10 +136,16 @@ export default function App() {
     setLiveFireMeta((m) => ({ ...m, status: "loading", error: null }));
     try {
       const feats = await fetchLiveFires(controller.signal);
-      setLiveFires(feats);
+      const inThailand = feats.filter((f) => {
+        const lat = Number(f.attributes?.latitude);
+        const lon = Number(f.attributes?.longitude);
+        if (!Number.isFinite(lat) || !Number.isFinite(lon)) return false;
+        return isInThailandBbox(lat, lon);
+      });
+      setLiveFires(inThailand);
       setLiveFireMeta({
         status: "ok",
-        count: feats.length,
+        count: inThailand.length,
         lastFetch: new Date(),
         error: null,
       });
@@ -162,7 +209,31 @@ export default function App() {
 
   const derived = useMemo(() => {
     if (!geojson) return null;
-    const features = geojson.features ?? [];
+    // Two-stage Thailand filter:
+    //   1. Bbox — fast first pass, drops obvious foreign cells.
+    //   2. Province presence — for PREDICTED features only, also require a
+    //      non-empty `province` field. risk_map.py only sets that when
+    //      find_province() returns a Thai province for the cell (inside the
+    //      77-province polygon). Bbox-alone leaks into S.Myanmar / N.Laos
+    //      etc; province filter drops those.
+    //   Observed FIRMS features keep just the bbox check — they're real
+    //   detections and the user might still want to see cross-border ones
+    //   for context (the Live Fires page has its own TH-only toggle).
+    const rawFeatures = (geojson.features ?? []).filter((f) => {
+      const [lon, lat] = f.geometry.coordinates;
+      return isInThailandBbox(lat, lon);
+    });
+    const features = rawFeatures.filter((f) => {
+      const prov = (f.properties.province ?? "").trim();
+      // Predicted cells: require province annotation (drops S.Myanmar/N.Laos leaks
+      // that fall inside the BBOX but outside Thailand's polygon).
+      if (f.properties.source === "predicted") return prov.length > 0;
+      // Observed FIRMS: bbox is sufficient — real hotspot coordinates are already
+      // inside Thailand. Province annotation is present on newer snapshots
+      // (risk_map.py ≥2026-05-26) but absent on older ones. Dropping province-less
+      // observations would blank out the Compare page and Live Fires observed layer.
+      return true;
+    });
 
     const observed = features.filter((f) => f.properties.source === "observed");
     const predictedAll = features.filter(
@@ -214,14 +285,14 @@ export default function App() {
             (f) => f.properties.days_until_fire === Number(selectedDay)
           );
 
-    // Day-selector status message — same wording as the original frontend.
+    // Day-selector status message — translated via the active language.
     const daySelectorMessage =
       selectedDay === "all"
-        ? `Showing all ${provinceFiltered.length} predicted cells.`
-        : `Showing ${dayFiltered.length} cells predicted to fire on ${dateAdd(
-            activeBaseDate,
-            Number(selectedDay)
-          )} (Day +${selectedDay}).`;
+        ? fmtTr(t("sidebar.showing.all"), { n: provinceFiltered.length })
+        : fmtTr(t("sidebar.showing.day"), {
+            n: dayFiltered.length,
+            date: dateAdd(activeBaseDate, Number(selectedDay)),
+          });
 
     return {
       observed,
@@ -235,7 +306,7 @@ export default function App() {
       resolvedProvince,
       daySelectorMessage,
     };
-  }, [geojson, selectedBaseDate, selectedProvince, selectedDay]);
+  }, [geojson, selectedBaseDate, selectedProvince, selectedDay, t]);
 
   // If the active province got reset because the snapshot dropped it, sync
   // the controlled state so the dropdown reflects "all".
@@ -309,6 +380,7 @@ export default function App() {
       }}
     />
   );
+  const welcomeBanner = <WelcomeBanner />;
 
   // ── Render route-specific content ──
   if (route === "live") {
@@ -335,6 +407,7 @@ export default function App() {
             }, 50);
           }}
         />
+        {welcomeBanner}
         {fireToasts}
       </>
     );
@@ -350,6 +423,45 @@ export default function App() {
           showSidebarToggle={false}
         />
         <NotifyPage predictedAll={derived.predictedAll} />
+        {welcomeBanner}
+        {fireToasts}
+      </>
+    );
+  }
+
+  if (route === "analytics") {
+    return (
+      <>
+        <TopBar
+          route={route}
+          onNavigate={navigate}
+          criticalCount={criticalCount}
+          showSidebarToggle={false}
+        />
+        <HotspotAnalyticsPage
+          liveFires={liveFires}
+          liveCount={liveFireMeta.count}
+        />
+        {welcomeBanner}
+        {fireToasts}
+      </>
+    );
+  }
+
+  if (route === "compare") {
+    return (
+      <>
+        <TopBar
+          route={route}
+          onNavigate={navigate}
+          criticalCount={criticalCount}
+          showSidebarToggle={false}
+        />
+        <ComparePage
+          allFeatures={derived.predictedAll}
+          observedFeatures={derived.observed}
+        />
+        {welcomeBanner}
         {fireToasts}
       </>
     );
@@ -368,6 +480,7 @@ export default function App() {
           metrics={meta.metrics ?? null}
           predictedAll={derived.predictedAll}
         />
+        {welcomeBanner}
         {fireToasts}
       </>
     );
@@ -383,6 +496,8 @@ export default function App() {
         showSidebarToggle={true}
         sidebarOpen={sidebarOpen}
         onToggleSidebar={() => setSidebarOpen((v) => !v)}
+        sidebarCollapsed={sidebarCollapsed}
+        onToggleSidebarCollapsed={() => setSidebarCollapsed((v) => !v)}
       />
       {sidebarOpen && (
         <div
@@ -391,7 +506,10 @@ export default function App() {
           aria-hidden="true"
         />
       )}
-      <div id="sidebar-wrap" className={sidebarOpen ? "open" : ""}>
+      <div
+        id="sidebar-wrap"
+        className={`${sidebarOpen ? "open" : ""}${sidebarCollapsed ? " desktop-collapsed" : ""}`}
+      >
       <Sidebar
         activeBaseDate={derived.activeBaseDate}
         allBaseDates={derived.allBaseDates}
@@ -450,6 +568,8 @@ export default function App() {
         metrics={meta.metrics ?? null}
       />
 
+      {welcomeBanner}
+
       {fireToasts}
     </>
   );
@@ -458,6 +578,7 @@ export default function App() {
 function TopBar({
   route, onNavigate, criticalCount,
   showSidebarToggle = false, sidebarOpen = false, onToggleSidebar,
+  sidebarCollapsed = false, onToggleSidebarCollapsed,
 }: {
   route: AlertPageRoute;
   onNavigate: (r: AlertPageRoute) => void;
@@ -465,19 +586,38 @@ function TopBar({
   showSidebarToggle?: boolean;
   sidebarOpen?: boolean;
   onToggleSidebar?: () => void;
+  sidebarCollapsed?: boolean;
+  onToggleSidebarCollapsed?: () => void;
 }) {
+  const { t } = useLang();
   return (
     <header className="top-bar">
       <div className="top-bar-brand">
+        {/* Mobile: hamburger ☰ that opens off-canvas drawer */}
         {showSidebarToggle && (
           <button
             type="button"
-            className="hamburger-btn"
+            className="hamburger-btn mobile-only"
             onClick={onToggleSidebar}
-            aria-label={sidebarOpen ? "Close sidebar" : "Open sidebar"}
+            aria-label={sidebarOpen ? t("sidebar.close") : t("sidebar.open")}
             aria-expanded={sidebarOpen}
           >
             <span>{sidebarOpen ? "✕" : "☰"}</span>
+          </button>
+        )}
+        {/* Desktop: chevron that collapses sidebar to 0 width */}
+        {showSidebarToggle && onToggleSidebarCollapsed && (
+          <button
+            type="button"
+            className="hamburger-btn desktop-only"
+            onClick={onToggleSidebarCollapsed}
+            aria-label={sidebarCollapsed ? t("sidebar.expand") : t("sidebar.collapse")}
+            aria-expanded={!sidebarCollapsed}
+            title={sidebarCollapsed ? t("sidebar.expand.hint") : t("sidebar.collapse.hint")}
+          >
+            <span style={{ display: "inline-block", transition: "transform 0.2s" }}>
+              {sidebarCollapsed ? "›" : "‹"}
+            </span>
           </button>
         )}
         <span className="top-bar-logo" aria-hidden="true">🔥</span>
@@ -485,6 +625,7 @@ function TopBar({
       </div>
       <NavTabs active={route} onNavigate={onNavigate} criticalCount={criticalCount} />
       <div className="top-bar-status">
+        <LanguageToggle />
         <ThemeToggle />
         <LiveStatusBadge />
       </div>

@@ -1,4 +1,5 @@
 import type { AlertPageRoute } from "../types";
+import { useLang } from "../utils/i18n";
 
 interface Props {
   active: AlertPageRoute;
@@ -6,40 +7,43 @@ interface Props {
   criticalCount: number;
 }
 
-// Top tab navigation between Dashboard / Notify / Reports. Notify tab carries
-// a red badge showing how many CRITICAL alerts currently demand operator
-// action — auto-updates from the parent's GeoJSON state.
 interface Tab {
   route: AlertPageRoute;
   icon: string;
-  label: string;
-  labelEn: string;
+  i18nKey: string;
+  fallback: string;
 }
 
 const TABS: Tab[] = [
-  { route: "dashboard", icon: "🗺", label: "แผนที่", labelEn: "Map" },
-  { route: "live",      icon: "🔥", label: "ไฟสด", labelEn: "Live Fires" },
-  { route: "notify",    icon: "🔔", label: "แจ้งเตือน", labelEn: "Notify" },
-  { route: "reports",   icon: "📊", label: "รายงาน", labelEn: "Reports" },
+  { route: "dashboard", icon: "🗺", i18nKey: "nav.map",       fallback: "Map" },
+  { route: "live",      icon: "🔥", i18nKey: "nav.live",      fallback: "Live Fires" },
+  { route: "analytics", icon: "📈", i18nKey: "nav.analytics", fallback: "Analytics" },
+  { route: "compare",   icon: "🆚", i18nKey: "nav.compare",   fallback: "Compare" },
+  { route: "notify",    icon: "🔔", i18nKey: "nav.notify",    fallback: "Alerts" },
+  { route: "reports",   icon: "📊", i18nKey: "nav.reports",   fallback: "Reports" },
 ];
 
 export default function NavTabs({ active, onNavigate, criticalCount }: Props) {
+  const { t } = useLang();
   return (
-    <nav className="nav-tabs" aria-label="หน้าหลัก">
-      {TABS.map((t) => {
-        const isActive = active === t.route;
-        const showBadge = t.route === "notify" && criticalCount > 0;
+    <nav className="nav-tabs" aria-label="primary">
+      {TABS.map((tab) => {
+        const isActive = active === tab.route;
+        const showBadge = tab.route === "notify" && criticalCount > 0;
+        // Strip leading emoji from t() since the tab renders its own icon span.
+        const fullLabel = t(tab.i18nKey, tab.fallback);
+        const label = fullLabel.replace(/^[\p{Extended_Pictographic}\s]+/u, "");
         return (
           <button
-            key={t.route}
+            key={tab.route}
             type="button"
             className={`nav-tab${isActive ? " active" : ""}`}
-            onClick={() => onNavigate(t.route)}
+            onClick={() => onNavigate(tab.route)}
             aria-current={isActive ? "page" : undefined}
-            aria-label={`${t.label} (${t.labelEn})`}
+            aria-label={fullLabel}
           >
-            <span className="nav-tab-icon" aria-hidden="true">{t.icon}</span>
-            <span className="nav-tab-label">{t.label}</span>
+            <span className="nav-tab-icon" aria-hidden="true">{tab.icon}</span>
+            <span className="nav-tab-label">{label}</span>
             {showBadge && (
               <span className="nav-tab-badge" aria-label={`${criticalCount} critical alerts`}>
                 {criticalCount > 99 ? "99+" : criticalCount}

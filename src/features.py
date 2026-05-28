@@ -57,6 +57,11 @@ WEATHER_COLUMNS: Tuple[str, ...] = (
 WEATHER_LAGS: Tuple[int, ...] = (1, 3, 7)
 WEATHER_ROLLS: Tuple[int, ...] = (3, 7)
 
+# RADD roll windows — wider than fire rolls because RADD has a 6–12 day revisit
+RADD_COLUMNS: Tuple[str, ...] = ("radd_alert_count", "radd_confidence_max")
+RADD_ROLLS: Tuple[int, ...] = (14, 30, 90)
+RADD_LAGS: Tuple[int, ...] = (7, 14, 30)
+
 UrgencyLevel = Literal["CRITICAL", "HIGH", "MEDIUM", "LOW", "NONE"]
 
 DEFAULT_URGENCY_THRESHOLDS: Dict[str, float] = {
@@ -545,6 +550,103 @@ def add_fire_recurrence_features(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def add_radd_features(df: pd.DataFrame) -> pd.DataFrame:
+    """CAUSAL past-only RADD alert features.
+
+    RADD has a ~6–12 day revisit cycle so individual cell-days are mostly zero.
+    Rolling windows of 14–90 days capture whether this cell has been confirmed as
+    an active disturbance area by Sentinel-1 radar, independent of optical satellites.
+    """
+    if not any(c in df.columns for c in RADD_COLUMNS):
+        return df
+
+    df = _ensure_sorted(df)
+
+    # Fill NaN with 0 — absence of RADD data means no confirmed alert
+    for col in RADD_COLUMNS:
+        if col in df.columns:
+            df[col] = df[col].fillna(0).astype("float32")
+
+    if "radd_alert_count" in df.columns:
+        for w in RADD_ROLLS:
+            # CAUSAL: shift(1) before rolling so today's value is excluded  # CAUSAL
+            df[f"radd_sum_{w}d"] = _past_roll(df, "radd_alert_count", w, "sum")
+            df[f"radd_active_{w}d"] = _past_roll(df, "radd_alert_count", w, "active")
+
+        for lag in RADD_LAGS:
+            df[f"radd_lag_{lag}"] = (  # CAUSAL
+                df.groupby(GROUP_KEYS, sort=False)["radd_alert_count"]
+                .shift(lag)
+                .fillna(0)
+                .astype("float32")
+                .to_numpy()
+            )
+
+    if "radd_confidence_max" in df.columns:
+        for w in RADD_ROLLS:
+            df[f"radd_conf_max_{w}d"] = _past_roll(df, "radd_confidence_max", w, "max")  # CAUSAL
+
+    return df
+
+
+def add_radd_cross_verified(df: pd.DataFrame, window: int = 10) -> pd.DataFrame:
+    """Add radd_cross_verified analysis column (NOT a model feature — forward-looking).
+
+    1 = at least one RADD alert appears in the same cell within `window` days of
+    the FIRMS-labelled fire (i.e. the label target date). Used in train.py to
+    report the fraction of FIRMS positives that are radar-confirmed.
+
+    NEVER add radd_cross_verified to FEATURES_* — it reads future RADD data.
+    """
+    df = _ensure_sorted(df).copy()
+
+    if "radd_alert_count" not in df.columns or "days_until_fire" not in df.columns:
+        df["radd_cross_verified"] = np.int8(0)
+        return df
+
+    has_radd = (df["radd_alert_count"].fillna(0) > 0).astype("float32")
+    df["_has_radd"] = has_radd
+
+    # Forward sum: does this cell have any RADD alert in the next `window` days?
+    fwd_sum = pd.Series(np.zeros(len(df), dtype="float32"), index=df.index)
+    for k in range(1, window + 1):
+        fwd_sum += df.groupby(GROUP_KEYS, sort=False)["_has_radd"].shift(-k).fillna(0)
+
+    is_positive = df["days_until_fire"].between(1, MAX_PREDICTION_DAYS)
+    df["radd_cross_verified"] = ((fwd_sum > 0) & is_positive).astype(np.int8)
+    df.drop(columns=["_has_radd"], inplace=True)
+    return df
+
+
+def add_multi_sat_confirmed(df: pd.DataFrame) -> pd.DataFrame:
+    """Add multi_sat_confirmed analysis column (NOT a model feature — forward-looking).
+
+    For each positive label row (days_until_fire ∈ {1..IMMINENT_DAYS}), records
+    how many independent VIIRS satellites confirmed the fire at the target date.
+    Used in train.py to upweight high-confidence positive labels.
+
+    NEVER add multi_sat_confirmed to FEATURES_* — it reads the future fire date.
+    """
+    if "n_satellites_today" not in df.columns or "days_until_fire" not in df.columns:
+        df["multi_sat_confirmed"] = np.int8(0)
+        return df
+
+    df = _ensure_sorted(df).copy()
+    sat_confirmed = pd.Series(np.zeros(len(df), dtype="float32"), index=df.index)
+
+    for k in range(1, MAX_PREDICTION_DAYS + 1):
+        sat_at_k = (
+            df.groupby(GROUP_KEYS, sort=False)["n_satellites_today"]
+            .shift(-k)
+            .fillna(0)
+        )
+        mask = df["days_until_fire"] == k
+        sat_confirmed = sat_confirmed.where(~mask, sat_at_k)
+
+    df["multi_sat_confirmed"] = sat_confirmed.astype(np.int8)
+    return df
+
+
 def make_label_days_until_fire(
     df: pd.DataFrame, horizon: int = MAX_PREDICTION_DAYS
 ) -> pd.DataFrame:
@@ -574,6 +676,21 @@ def build_features(
     horizon: int = MAX_PREDICTION_DAYS,
     grid_size: float = 0.1,
 ) -> pd.DataFrame:
+    # ── Downcast input to float32 BEFORE feature engineering so every
+    # downstream `.shift().rolling()` produces float32 Series too. This
+    # halves PEAK memory during build (10-12 GB → 5-6 GB on a 4.4M-row
+    # frame) which is what was OOM-killing predict-only on a 22 GB laptop.
+    # lat_grid / lon_grid stay float64 for exact grid arithmetic.
+    import gc
+    daily = daily.copy()
+    keep_64 = {"lat_grid", "lon_grid", "date"}
+    for c in daily.columns:
+        if c in keep_64:
+            continue
+        if daily[c].dtype == "float64":
+            daily[c] = daily[c].astype("float32")
+    gc.collect()
+
     df = add_neighbor_features(daily, grid_size=grid_size)
     df = add_temporal_features(df)
     df = add_calendar_features(df)
@@ -582,9 +699,29 @@ def build_features(
     df = add_season_features(df)
     df = add_urban_distance(df)
     df = add_fire_recurrence_features(df)
+    df = add_radd_features(df)
     df = make_label_days_until_fire(df, horizon=horizon)
+    df = add_radd_cross_verified(df)
+    df = add_multi_sat_confirmed(df)
+
+    # ── Downcast float64 → float32 across all feature columns ──
+    # On a 4.4M × ~180-col frame this halves memory (≈3.5 GB → ≈1.8 GB)
+    # without affecting LightGBM accuracy (the histogram binner doesn't care
+    # about the extra precision). lat_grid / lon_grid stay float64 for
+    # exact grid arithmetic; the label is int.
+    import gc
+    keep_64 = {"lat_grid", "lon_grid"}
+    for c in df.columns:
+        if c in keep_64:
+            continue
+        if df[c].dtype == "float64":
+            df[c] = df[c].astype("float32")
+        elif df[c].dtype == "int64" and c != "days_until_fire":
+            df[c] = df[c].astype("int32")
+    gc.collect()
+
     log.info(
-        "Built features for %d rows, %d positive labels (fire within %d days)",
+        "Built features for %d rows, %d positive labels (fire within %d days) — float32",
         len(df),
         int((df["days_until_fire"] >= 0).sum()),
         horizon,
@@ -670,6 +807,15 @@ def _build_core_feature_list() -> List[str]:
     return cols
 
 
+def _build_radd_feature_list() -> List[str]:
+    cols: List[str] = []
+    for w in RADD_ROLLS:
+        cols += [f"radd_sum_{w}d", f"radd_active_{w}d", f"radd_conf_max_{w}d"]
+    for lag in RADD_LAGS:
+        cols.append(f"radd_lag_{lag}")
+    return cols
+
+
 def _build_weather_feature_list() -> List[str]:
     cols: List[str] = []
     for c in WEATHER_COLUMNS:
@@ -683,11 +829,13 @@ def _build_weather_feature_list() -> List[str]:
 
 FEATURES_CORE: Tuple[str, ...] = tuple(_build_core_feature_list())
 FEATURES_WEATHER: Tuple[str, ...] = tuple(_build_weather_feature_list())
+FEATURES_RADD: Tuple[str, ...] = tuple(_build_radd_feature_list())
 FEATURES: Tuple[str, ...] = FEATURES_CORE
 
 
 def resolve_features(df: pd.DataFrame) -> List[str]:
-    """Return the feature list actually present in `df`, including weather columns."""
+    """Return the feature list actually present in `df`, including optional columns."""
     feats: List[str] = [c for c in FEATURES_CORE if c in df.columns]
     feats += [c for c in FEATURES_WEATHER if c in df.columns]
+    feats += [c for c in FEATURES_RADD if c in df.columns]
     return feats

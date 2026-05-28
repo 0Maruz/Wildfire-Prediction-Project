@@ -74,6 +74,15 @@ def _eval_window(y: np.ndarray, p: np.ndarray, thr: float) -> Dict[str, float]:
 def main() -> None:
     t0 = time.time()
     print("[1/3] Loading model + scanning parquet...")
+    # train.py defines _EnsembleRegressor; when train.py runs as __main__
+    # joblib pickles it with __module__ = "__main__". Other entry points
+    # (this script, api.py, standalone risk_map.py) need the class
+    # aliased into their own __main__ before unpickling.
+    _main_mod = sys.modules.get("__main__")
+    if _main_mod is not None:
+        for _name in ("_EnsembleRegressor", "_prob_to_days_for_compat"):
+            if hasattr(train, _name) and not hasattr(_main_mod, _name):
+                setattr(_main_mod, _name, getattr(train, _name))
     model = joblib.load(MODEL_PATH)
     if not isinstance(model, train._EnsembleRegressor):
         raise SystemExit(f"Not _EnsembleRegressor: {type(model)}")
@@ -154,6 +163,48 @@ def main() -> None:
     with open(OUT_PATH, "w") as f:
         json.dump({"summary": summary, "months": results}, f, indent=2, default=str)
     print(f"\nWrote {OUT_PATH}")
+
+    # Patch dataset_info.json + GeoJSON so the dashboard's Reports page can
+    # render the rolling AUC chart without a separate fetch — mirrors what
+    # scripts/scientific_stats.py does for its bootstrap CIs.
+    inline_months = [
+        {"month": r["month"], "auc": r["auc"], "positive_rate": r["positive_rate"], "n": r["n"]}
+        for r in results
+    ]
+    try:
+        meta_path = os.path.join(ROOT, "outputs", "metadata", "dataset_info.json")
+        with open(meta_path) as f:
+            meta = json.load(f)
+        tm = meta.setdefault("model", {}).setdefault("test_metrics", {})
+        tm["rolling_by_month"] = inline_months
+        tm["stability_months"] = summary["months_evaluated"]
+        tm["stability_valid_months"] = summary["valid_months"]
+        tm["stability_auc_mean"] = summary["auc_mean"]
+        tm["stability_auc_std"] = summary["auc_std"]
+        tm["stability_auc_min"] = summary["auc_min"]
+        tm["stability_auc_max"] = summary["auc_max"]
+        with open(meta_path, "w") as f:
+            json.dump(meta, f, indent=2, default=str)
+        print(f"✓ Patched {meta_path}")
+
+        gj_path = os.path.join(ROOT, "outputs", "riskmap", "fire_dates_all.geojson")
+        if os.path.exists(gj_path):
+            with open(gj_path) as f:
+                gj = json.load(f)
+            gj_metrics = gj.setdefault("metadata", {}).setdefault("metrics", {})
+            gj_metrics["rolling_by_month"] = inline_months
+            gj_metrics["stability_months"] = summary["months_evaluated"]
+            gj_metrics["stability_valid_months"] = summary["valid_months"]
+            gj_metrics["stability_auc_mean"] = summary["auc_mean"]
+            gj_metrics["stability_auc_std"] = summary["auc_std"]
+            gj_metrics["stability_auc_min"] = summary["auc_min"]
+            gj_metrics["stability_auc_max"] = summary["auc_max"]
+            with open(gj_path, "w") as f:
+                json.dump(gj, f)
+            print(f"✓ Patched {gj_path}")
+    except (OSError, json.JSONDecodeError) as exc:
+        print(f"⚠ Could not patch dataset_info/geojson: {exc}")
+
     print(f"Done in {time.time() - t0:.1f}s")
 
 

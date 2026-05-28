@@ -1,4 +1,5 @@
 import type { ValidationMetrics } from "../types";
+import { fmtTr, useLang } from "../utils/i18n";
 import MetricCard, { type MetricStatus } from "./MetricCard";
 
 interface Props {
@@ -29,12 +30,12 @@ function auc2Grade(auc?: number): { grade: string; status: MetricStatus } {
   return { grade: "D", status: "bad" };
 }
 
-function eceStatus(ece?: number): { label: string; status: MetricStatus } {
+function eceStatus(ece: number | undefined, t: (k: string, fb?: string) => string): { label: string; status: MetricStatus } {
   if (typeof ece !== "number" || !isFinite(ece)) return { label: "—", status: "ok" };
-  if (ece < 0.05) return { label: "ดีมาก ✓", status: "great" };
-  if (ece < 0.10) return { label: "ดี",       status: "good"  };
-  if (ece < 0.15) return { label: "พอใช้",    status: "ok"    };
-  return { label: "ไม่ดี", status: "bad" };
+  if (ece < 0.05) return { label: t("hero.card.calib.status.great"), status: "great" };
+  if (ece < 0.10) return { label: t("hero.card.calib.status.good"),  status: "good"  };
+  if (ece < 0.15) return { label: t("hero.card.calib.status.ok"),    status: "ok"    };
+  return { label: t("hero.card.calib.status.bad"), status: "bad" };
 }
 
 function stabilityStatus(auc?: number, std?: number): MetricStatus {
@@ -46,6 +47,7 @@ function stabilityStatus(auc?: number, std?: number): MetricStatus {
 }
 
 export default function AccuracyHero({ metrics, onShowDetails }: Props) {
+  const { t } = useLang();
   const isBinary = metrics?.task === "binary_fire_in_3d";
 
   // Legacy regression fallback — kept minimal
@@ -75,7 +77,6 @@ export default function AccuracyHero({ metrics, onShowDetails }: Props) {
   const precisionTop20 = metrics?.precision_at_top_20pct;
   const posRate = metrics?.test_positive_rate;
   const deployRecall = metrics?.deployment_recall;
-  const deployPrecision = metrics?.deployment_precision;
   const deployThr = metrics?.deployment_threshold;
 
   const stabilityMean = metrics?.stability_auc_mean;
@@ -86,7 +87,7 @@ export default function AccuracyHero({ metrics, onShowDetails }: Props) {
 
   const calibratedAt = metrics?.calibration_method ? true : false;
   const { grade, status: gradeStatus } = auc2Grade(auc);
-  const { label: eceLabel, status: eceStat } = eceStatus(ece);
+  const { label: eceLabel, status: eceStat } = eceStatus(ece, t);
   const stStat = stabilityStatus(stabilityMean, stabilityStd);
 
   const fmtPct = (v?: number, d = 0) =>
@@ -99,9 +100,9 @@ export default function AccuracyHero({ metrics, onShowDetails }: Props) {
       {/* Header with title + ⓘ */}
       <div style={{ margin: "12px 16px 0", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <div style={{ fontSize: 11, fontWeight: 600, letterSpacing: "0.08em", textTransform: "uppercase", color: "var(--text-3)" }}>
-          🔥 ประสิทธิภาพโมเดล
+          {t("hero.title")}
         </div>
-        <button className="info-btn" type="button" onClick={onShowDetails} title="ดู technical metrics ทั้งหมด">
+        <button className="info-btn" type="button" onClick={onShowDetails} title={t("hero.info.tooltip")}>
           ⓘ
         </button>
       </div>
@@ -110,90 +111,56 @@ export default function AccuracyHero({ metrics, onShowDetails }: Props) {
       <div className="status-row">
         <span className={`status-badge ${stStat}`}>
           <span className="status-badge-icon">⚡</span>
-          เสถียร {stabilityMonths ?? "—"} เดือน
+          {stabilityMonths != null
+            ? fmtTr(t("hero.badge.stable"), { months: stabilityMonths })
+            : t("hero.badge.stable.placeholder")}
         </span>
         <span className={`status-badge ${eceStat}`}>
           <span className="status-badge-icon">✓</span>
-          {calibratedAt ? "Calibrated" : "Uncalibrated"}
+          {calibratedAt ? t("hero.badge.calibrated") : t("hero.badge.uncalibrated")}
         </span>
         <span className={`status-badge ${gradeStatus}`}>
           <span className="status-badge-icon">⭐</span>
-          เกรด {grade}
+          {fmtTr(t("hero.badge.grade"), { grade })}
         </span>
       </div>
 
+      {/* 2 HERO metrics + collapsible expander for the remaining 3 */}
       <div className="metrics-stack">
-        {/* HERO: Stability — strongest, most reassuring metric */}
-        <MetricCard
-          highlight
-          label="ความเสถียรของโมเดล"
-          value={typeof stabilityMean === "number" ? stabilityMean.toFixed(3) : "—"}
-          subtitle={
-            stabilityMonths != null && typeof stabilityMin === "number" && typeof stabilityMax === "number"
-              ? `AUC เฉลี่ยทั้ง ${stabilityMonths} เดือน · ช่วง ${stabilityMin.toFixed(2)}–${stabilityMax.toFixed(2)}`
-              : "AUC เฉลี่ยทั้งปี"
-          }
-          statusLabel={stStat === "great" ? "เสถียรมาก" : stStat === "good" ? "เสถียร" : "ปานกลาง"}
-          status={stStat}
-          range={{
-            min: 0.5, max: 1.0, current: stabilityMean ?? 0.5,
-            markers: [
-              { position: 0.3, label: "OK 0.65", color: "#eab308" },
-              { position: 0.5, label: "Good 0.75", color: "#84cc16" },
-              { position: 0.7, label: "Great 0.85", color: "#22c55e" },
-            ],
-          }}
-          description="วัด AUC โมเดลในแต่ละเดือนตลอด 17 เดือน แล้วเฉลี่ย — สูง = โมเดลทำงานดีไม่ว่าจะเป็นฤดูเผาหรือไม่ใช่ (รวมทั้ง ground-truth recent month)"
-          goodRange="≥ 0.85 = เสถียรมาก · 0.75–0.84 = เสถียร · 0.65–0.74 = พอใช้ · < 0.65 = ไม่เสถียร (อาจมี data drift)"
-        />
-
-        {/* 2x2 grid */}
         <div className="metrics-grid">
           <MetricCard
-            label="ความน่าเชื่อถือของ %"
-            value={fmt(ece, 4)}
-            statusLabel={eceLabel}
-            status={eceStat}
-            subtitle="Expected Calibration Error · ต่ำ = ดี"
-            range={{
-              min: 0, max: 0.3, current: ece ?? 0.05,
-              markers: [
-                { position: 0.05 / 0.3, label: "Great <0.05", color: "#22c55e" },
-                { position: 0.10 / 0.3, label: "Good <0.10",  color: "#84cc16" },
-                { position: 0.15 / 0.3, label: "OK <0.15",    color: "#eab308" },
-              ],
-            }}
-            description="ECE วัดว่า probability ที่โมเดลออกมาตรงกับความเป็นจริงแค่ไหน — เช่น cell ที่ได้ probability 70% ในความเป็นจริง 70% เกิดไฟจริงหรือไม่"
-            goodRange="< 0.05 = probability เชื่อถือได้เหมือนเปอร์เซ็นต์จริง · < 0.10 = ดี · > 0.15 = อย่าใช้ probability เป็นเปอร์เซ็นต์ ใช้แค่จัดอันดับ"
-          />
-
-          <MetricCard
-            label="Watch-list ดีกว่าสุ่ม"
-            value={typeof upliftTop20 === "number" ? `${upliftTop20.toFixed(1)}×` : "—"}
-            status={upliftTop20 == null ? "ok" : upliftTop20 >= 3 ? "great" : upliftTop20 >= 2 ? "good" : upliftTop20 >= 1.5 ? "ok" : "warn"}
-            subtitle={
-              typeof precisionTop20 === "number" && typeof posRate === "number"
-                ? `top 20% → ${Math.round(precisionTop20 * 1000)} เป็นไฟจริง (สุ่ม ${Math.round(posRate * 1000)})`
-                : undefined
+            highlight
+            label={t("hero.card.recall.label")}
+            value={fmtPct(deployRecall, 0)}
+            status={
+              deployRecall == null ? "ok"
+              : deployRecall >= 0.80 ? "great"
+              : deployRecall >= 0.60 ? "good"
+              : deployRecall >= 0.40 ? "ok" : "warn"
             }
+            subtitle={fmtTr(t("hero.card.recall.subtitle"), {
+              pct: fmtPct(deployRecall, 0),
+              thr: typeof deployThr === "number" ? deployThr.toFixed(2) : "—",
+            })}
             range={{
-              min: 1, max: 6, current: upliftTop20 ?? 1,
+              min: 0, max: 1, current: deployRecall ?? 0,
               markers: [
-                { position: 0.2,  label: "OK 2×",    color: "#eab308" },
-                { position: 0.4,  label: "Good 3×",  color: "#84cc16" },
-                { position: 0.6,  label: "Great 4×", color: "#22c55e" },
+                { position: 0.4, label: t("hero.card.recall.marker.ok"),    color: "#eab308" },
+                { position: 0.6, label: t("hero.card.recall.marker.good"),  color: "#84cc16" },
+                { position: 0.8, label: t("hero.card.recall.marker.great"), color: "#22c55e" },
               ],
             }}
-            description="ใน 20% ของ cell ที่โมเดลให้คะแนนสูงสุด มีกี่% เป็นไฟจริง — เทียบกับการสุ่มเลือก 20% ทั่วไป. ค่านี้บอก operational lift ของ watch-list"
-            goodRange="≥ 3× = ดี · 2–3× = พอใช้ · < 2× = โมเดลแค่ดีกว่าสุ่มเล็กน้อย"
+            description={t("hero.card.recall.description")}
+            goodRange={t("hero.card.recall.range")}
           />
 
           <MetricCard
-            label="คุณภาพ Ranking (AUC)"
+            highlight
+            label={t("hero.card.auc.label")}
             value={fmt(auc, 3)}
             statusLabel={grade}
             status={gradeStatus}
-            subtitle="ROC-AUC · 0.5 = สุ่ม, 1.0 = perfect"
+            subtitle={fmtTr(t("hero.card.auc.subtitle"), { grade })}
             range={{
               min: 0.5, max: 1.0, current: auc ?? 0.5,
               markers: [
@@ -203,32 +170,95 @@ export default function AccuracyHero({ metrics, onShowDetails }: Props) {
                 { position: 0.8, label: "A 0.90",  color: "#16a34a" },
               ],
             }}
-            description="ถ้าเอา cell 2 อันมา อันหนึ่งจะเกิดไฟ อีกอันไม่ — โอกาสที่โมเดลจะให้คะแนนอันที่จะเกิดไฟสูงกว่า"
-            goodRange="≥ 0.90 = ดีเยี่ยม (A) · 0.80–0.89 = ดี · 0.70–0.79 = พอใช้ · < 0.70 = ไม่ดี"
-          />
-
-          <MetricCard
-            label={`Recall @ threshold ${typeof deployThr === "number" ? deployThr.toFixed(2) : "—"}`}
-            value={fmtPct(deployRecall, 0)}
-            status={
-              deployRecall == null ? "ok"
-              : deployRecall >= 0.80 ? "great"
-              : deployRecall >= 0.60 ? "good"
-              : deployRecall >= 0.40 ? "ok" : "warn"
-            }
-            subtitle={`Precision ${fmtPct(deployPrecision, 0)} · ที่ deployment threshold`}
-            range={{
-              min: 0, max: 1, current: deployRecall ?? 0,
-              markers: [
-                { position: 0.4, label: "OK 40%",   color: "#eab308" },
-                { position: 0.6, label: "Good 60%", color: "#84cc16" },
-                { position: 0.8, label: "Great 80%", color: "#22c55e" },
-              ],
-            }}
-            description="เมื่อตั้ง threshold เพื่อ alert (= deployment threshold) — โมเดลจับไฟที่เกิดขึ้นจริงได้กี่%. ใน wildfire monitoring สูง = ดีเพราะอย่าพลาดไฟ"
-            goodRange="≥ 80% = ดี · 60–79% = ใช้ได้ · < 60% = พลาดไฟเยอะ · เทรดออฟ: recall สูง → precision ต่ำ (false alarm มากขึ้น)"
+            description={t("hero.card.auc.description")}
+            goodRange={t("hero.card.auc.range")}
           />
         </div>
+
+        {/* Secondary metrics in collapsible expander */}
+        <details className="metrics-expander">
+          <summary>
+            <span>{t("hero.expander.title")}</span>
+            <span className="metrics-expander-hint">{t("hero.expander.hint")}</span>
+          </summary>
+          <div className="metrics-grid" style={{ marginTop: 10 }}>
+            <MetricCard
+              label={t("hero.card.stability.label")}
+              value={typeof stabilityMean === "number" ? stabilityMean.toFixed(3) : "—"}
+              subtitle={
+                stabilityMonths != null && typeof stabilityMin === "number" && typeof stabilityMax === "number"
+                  ? fmtTr(t("hero.card.stability.subtitle.range"), {
+                      months: stabilityMonths,
+                      min: stabilityMin.toFixed(2),
+                      max: stabilityMax.toFixed(2),
+                    })
+                  : t("hero.card.stability.subtitle.fallback")
+              }
+              statusLabel={
+                stStat === "great" ? t("hero.card.stability.status.great")
+                : stStat === "good" ? t("hero.card.stability.status.good")
+                : t("hero.card.stability.status.ok")
+              }
+              status={stStat}
+              range={{
+                min: 0.5, max: 1.0, current: stabilityMean ?? 0.5,
+                markers: [
+                  { position: 0.3, label: "OK 0.65", color: "#eab308" },
+                  { position: 0.5, label: "Good 0.75", color: "#84cc16" },
+                  { position: 0.7, label: "Great 0.85", color: "#22c55e" },
+                ],
+              }}
+              description={t("hero.card.stability.description")}
+              goodRange={t("hero.card.stability.range")}
+            />
+
+            <MetricCard
+              label={t("hero.card.calib.label")}
+              value={fmt(ece, 4)}
+              statusLabel={eceLabel}
+              status={eceStat}
+              subtitle={t("hero.card.calib.subtitle")}
+              range={{
+                min: 0, max: 0.3, current: ece ?? 0.05,
+                markers: [
+                  { position: 0.05 / 0.3, label: "Great <0.05", color: "#22c55e" },
+                  { position: 0.10 / 0.3, label: "Good <0.10",  color: "#84cc16" },
+                  { position: 0.15 / 0.3, label: "OK <0.15",    color: "#eab308" },
+                ],
+              }}
+              description={t("hero.card.calib.description")}
+              goodRange={t("hero.card.calib.range")}
+            />
+
+            <MetricCard
+              label={t("hero.card.uplift.label")}
+              value={typeof upliftTop20 === "number" ? `${upliftTop20.toFixed(1)}×` : "—"}
+              status={upliftTop20 == null ? "ok" : upliftTop20 >= 3 ? "great" : upliftTop20 >= 2 ? "good" : upliftTop20 >= 1.5 ? "ok" : "warn"}
+              subtitle={
+                typeof precisionTop20 === "number" && typeof posRate === "number"
+                  ? fmtTr(t("hero.card.uplift.subtitle"), {
+                      hit: Math.round(precisionTop20 * 1000),
+                      random: Math.round(posRate * 1000),
+                    })
+                  : undefined
+              }
+              range={{
+                min: 1, max: 6, current: upliftTop20 ?? 1,
+                markers: [
+                  { position: 0.2,  label: "OK 2×",    color: "#eab308" },
+                  { position: 0.4,  label: "Good 3×",  color: "#84cc16" },
+                  { position: 0.6,  label: "Great 4×", color: "#22c55e" },
+                ],
+              }}
+              description={t("hero.card.uplift.description")}
+              goodRange={t("hero.card.uplift.range")}
+            />
+          </div>
+          <p style={{ fontSize: 11, color: "var(--text-3)", marginTop: 8, lineHeight: 1.5 }}>
+            {t("hero.expander.more")}{" "}
+            <a href="#reports" style={{ color: "var(--accent)" }}>{t("hero.expander.reports_link")}</a>
+          </p>
+        </details>
       </div>
     </>
   );

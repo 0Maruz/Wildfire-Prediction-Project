@@ -28,7 +28,7 @@ Spec compliance notes:
 from __future__ import annotations
 
 import argparse
-import json
+import gc
 import logging
 import os
 import time
@@ -36,11 +36,21 @@ import warnings
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
-import joblib
 import numpy as np
 import pandas as pd
 from dotenv import load_dotenv
-from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import (
+    accuracy_score,
+    average_precision_score,
+    f1_score,
+    mean_absolute_error,
+    mean_squared_error,
+    precision_score,
+    r2_score,
+    recall_score,
+    roc_auc_score,
+)
 from sklearn.model_selection import RandomizedSearchCV, TimeSeriesSplit
 
 try:
@@ -65,7 +75,7 @@ from features import (
     build_features,
     resolve_features,
 )
-from io_utils import resolve_existing, write_table
+from storage import resolve_existing, write_json, write_pickle, write_table
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s | %(levelname)s | %(name)s | %(message)s"
@@ -116,6 +126,7 @@ def _paths() -> dict:
         "firms_path": _resolve(base_dir, os.getenv("FIRMS_PATH")) or os.path.join(base_dir, "data", "firms", "firms_all.parquet"),
         "weather_path": os.path.join(weather_dir, "weather_cache.parquet"),
         "tree_cover_path": os.path.join(base_dir, "data", "static", "tree_cover_per_cell.parquet"),
+        "radd_path": os.path.join(base_dir, "data", "radd", "radd_alerts.parquet"),
         "output_dir": output_dir,
         "model_dir": os.path.join(output_dir, "models"),
         "feature_dir": os.path.join(output_dir, "features"),
@@ -130,11 +141,14 @@ def _compute_sample_weights(
     y: pd.Series,
     dates: pd.Series,
     recency_halflife_days: float = 45.0,
+    multi_sat: Optional[np.ndarray] = None,
 ) -> np.ndarray:
-    """Inverse-class-frequency × recency decay × short-horizon boost.
+    """Inverse-class-frequency × recency decay × multi-satellite confirmation bonus.
 
-    Goal: focus model on imminent-fire predictions (days 1-3) which are the
-    operator-actionable cases, and on recent data because fire patterns drift.
+    multi_sat: int8 array (same length as y) — number of VIIRS satellites that
+    confirmed the fire at the target date. 2-sat detections get a 1.3× boost;
+    3-sat get 1.5×. Kept gentle to avoid destabilising the ensemble (previous
+    runs with heavier boosts increased variance).
     """
     label_counts = y.value_counts()
     n_classes = max(len(label_counts), 1)
@@ -146,13 +160,13 @@ def _compute_sample_weights(
     days_ago = (max_date - pd.to_datetime(dates)).dt.days.to_numpy().astype(float)
     sw_recency = np.exp(-days_ago / max(recency_halflife_days, 1.0))
 
-    y_arr = y.to_numpy()
-    # Binary target: positives (fire imminent) already get scale_pos_weight via
-    # the LGBM `scale_pos_weight` param, so the per-row boost here is identity.
-    # Recency × class-rebalance is what _compute_sample_weights still adds.
-    boundary_boost = np.ones_like(y_arr, dtype=float)
+    # Gentle multi-satellite confirmation bonus: 2+ satellites → 1.1×, 3 → 1.2×
+    sat_boost = np.ones(len(y), dtype=float)
+    if multi_sat is not None:
+        sat_boost[multi_sat >= 2] = 1.1
+        sat_boost[multi_sat >= 3] = 1.2
 
-    sw = sw_class * sw_recency * boundary_boost
+    sw = sw_class * sw_recency * sat_boost
     mean_sw = float(sw.mean()) if sw.size else 1.0
     if mean_sw > 0:
         sw /= mean_sw
@@ -960,6 +974,7 @@ def main(
     urban_filter_enabled = os.getenv("URBAN_FILTER_ENABLED", "true").lower() in ("1", "true", "yes")
     urban_buffer_km = float(os.getenv("URBAN_BUFFER_KM", "0.0"))
     tree_cover_path = p["tree_cover_path"] if os.path.exists(p["tree_cover_path"]) else None
+    radd_path = resolve_existing(p["radd_path"])
 
     daily = load_and_prepare(
         raw_dir=p["raw_dir"],
@@ -969,6 +984,7 @@ def main(
         densify=True,
         weather_path=weather_path,
         tree_cover_path=tree_cover_path,
+        radd_path=radd_path,
         filter_urban=urban_filter_enabled,
         urban_buffer_km=urban_buffer_km,
     )
@@ -1018,6 +1034,12 @@ def main(
         if not os.path.isfile(model_path):
             raise RuntimeError("predict-only requires an existing trained model")
         log.info("==== predict-only: skipped tuning ====")
+        # CRITICAL: free 5-6 GB of feature-engineering memory BEFORE calling
+        # risk_map.run(). Otherwise we stack risk_map's ~3.5 GB load on top
+        # of the still-resident feats/daily frames and OOM on a 22 GB laptop.
+        log.info("Releasing feature-engineering memory before risk_map…")
+        del feats, feats_sorted, daily
+        gc.collect()
         if not skip_risk_map:
             try:
                 from risk_map import run as generate_risk_map
@@ -1036,7 +1058,8 @@ def main(
     #      undersample is still representative since we never touched the time
     #      ordering of positives, only thinned negatives uniformly at random.
     feature_cols = resolve_features(feats)
-    keep_cols = list(set(feature_cols + ["date", "lat_grid", "lon_grid", "days_until_fire"]))
+    analysis_cols = [c for c in ["radd_cross_verified", "multi_sat_confirmed"] if c in feats.columns]
+    keep_cols = list(set(feature_cols + ["date", "lat_grid", "lon_grid", "days_until_fire"] + analysis_cols))
     feats = feats[keep_cols].copy()
 
     # Cast feature columns to float32 in-place (lat/lon kept as float64 for grid math)
@@ -1064,7 +1087,7 @@ def main(
     )
     # Release the full-densified frame
     del feats
-    import gc; gc.collect()
+    gc.collect()
 
     log.info("==== STEP 4: chronological train / val / test split ====")
     train_df, val_df, test_df = chronological_split(
@@ -1083,10 +1106,17 @@ def main(
     # ── Backwards-compat shims so the metadata block below still works ────
     train_df_us, val_df_us = train_df, val_df
 
-    log.info("==== STEP 4b: compute sample weights (recency + class balance) ====")
-    # Use the binary label as a Series for _compute_sample_weights' class_weight call.
+    log.info("==== STEP 4b: compute sample weights (recency + class balance + multi-sat) ====")
+    multi_sat_train = (
+        train_df_us["multi_sat_confirmed"].to_numpy()
+        if "multi_sat_confirmed" in train_df_us.columns else None
+    )
+    if multi_sat_train is not None:
+        n2 = int((multi_sat_train >= 2).sum())
+        n3 = int((multi_sat_train >= 3).sum())
+        log.info("  Multi-satellite confirmed positives: 2-sat=%d  3-sat=%d", n2, n3)
     sample_weight_train = _compute_sample_weights(
-        pd.Series(y_train_bin), train_df_us["date"]
+        pd.Series(y_train_bin), train_df_us["date"], multi_sat=multi_sat_train
     )
     log.info(
         "Sample weights: min=%.3f max=%.3f mean=%.3f",
@@ -1156,7 +1186,6 @@ def main(
     # 45% in practice. Fit a 1-D logistic regression (Platt scaling) on val
     # so probabilities become operator-meaningful.
     log.info("==== STEP 6b: probability calibration (Platt scaling on val) ====")
-    from sklearn.linear_model import LogisticRegression
     val_raw_proba = best_model._raw_proba(X_val)
     val_ece_before = expected_calibration_error(y_val_bin, val_raw_proba)
     calibrator = LogisticRegression(C=1.0, solver="lbfgs", max_iter=200)
@@ -1174,10 +1203,6 @@ def main(
     test_pred = best_model.predict(X_test)                  # mapped 1..7 pseudo-days (compat)
 
     # ── Binary metrics ─────────────────────────────────────────────
-    from sklearn.metrics import (
-        accuracy_score, precision_score, recall_score, f1_score,
-        roc_auc_score, average_precision_score,
-    )
     # Default decision threshold = 0.5; also report at best F1 threshold
     test_pred_bin = (test_proba >= 0.5).astype(int)
     auc = float(roc_auc_score(y_test_bin, test_proba)) if len(np.unique(y_test_bin)) > 1 else 0.0
@@ -1241,10 +1266,31 @@ def main(
         "ece": round(test_ece, 4),
         "ece_val_before_calibration": round(val_ece_before, 4),
         "ece_val_after_calibration": round(val_ece_after, 4),
+        # Flag persisted so the dashboard's "Calibrated" badge lights up
+        # (frontend treats any truthy calibration_method as calibrated).
+        "calibration_method": "platt_sigmoid",
         "reliability_bins": reliability,
         **pak_metrics,
     }
     log.info("Binary test metrics: %s", overall_bin)
+
+    # ── RADD cross-verification (independent radar confirmation) ────
+    radd_verify_stats: dict = {}
+    if "radd_cross_verified" in test_df.columns:
+        pos_mask = y_test_bin == 1
+        n_pos_test = int(pos_mask.sum())
+        n_radd_confirmed = int(test_df.loc[pos_mask, "radd_cross_verified"].sum())
+        radd_verify_rate = n_radd_confirmed / max(n_pos_test, 1)
+        radd_verify_stats = {
+            "radd_confirmed_positives": n_radd_confirmed,
+            "radd_total_positives": n_pos_test,
+            "radd_verification_rate": round(radd_verify_rate, 4),
+        }
+        log.info(
+            "RADD cross-verification: %d / %d FIRMS positives (%.1f%%) confirmed by Sentinel-1 radar",
+            n_radd_confirmed, n_pos_test, 100 * radd_verify_rate,
+        )
+    overall_bin["radd_verification"] = radd_verify_stats
 
     # ── Pseudo-days metrics (backwards-compat with risk_map.py) ────
     overall = overall_metrics(y_test_days.astype(float), test_pred, horizon=MAX_PREDICTION_DAYS)
@@ -1339,14 +1385,13 @@ def main(
 
     log.info("==== STEP 8: persist artifacts ====")
     model_path = os.path.join(p["model_dir"], "lgbm_fire_date_model.pkl")
-    joblib.dump(best_model, model_path)
+    write_pickle(best_model, model_path)
     log.info("Saved model → %s", model_path)
 
     history_dir = os.path.join(p["model_dir"], "history")
-    os.makedirs(history_dir, exist_ok=True)
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     history_path = os.path.join(history_dir, f"{timestamp}_lightgbm.pkl")
-    joblib.dump(best_model, history_path)
+    write_pickle(best_model, history_path)
 
     feature_importance: List[Dict[str, Any]] = []
     if hasattr(best_model, "feature_importances_") and best_model.feature_importances_ is not None:
@@ -1481,12 +1526,22 @@ def main(
     }
 
     meta_path = os.path.join(p["meta_dir"], "dataset_info.json")
-    with open(meta_path, "w", encoding="utf-8") as f:
-        json.dump(metadata, f, indent=2, default=str)
+    write_json(metadata, meta_path, indent=2, default=str)
     log.info("Saved metadata → %s", meta_path)
 
     if not skip_risk_map:
         log.info("==== STEP 10: refresh risk map ====")
+        # Free the largest training objects before risk_map loads its own
+        # ~3.5 GB parquet. `del locals()[name]` is a Python no-op (locals()
+        # returns a copy), so we delete each name explicitly then force a GC
+        # cycle. This reliably reclaims 4–6 GB on a 22 GB laptop.
+        del X_train, X_val, X_test
+        del y_train_bin, y_val_bin, y_test_bin
+        del train_df, val_df, test_df, train_pool
+        del train_df_us, val_df_us
+        del full_X, full_y_bin, full_sw
+        del sample_weight_train, search, estimator
+        gc.collect()
         try:
             from risk_map import run as generate_risk_map
             generate_risk_map()

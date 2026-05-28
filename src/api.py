@@ -1,9 +1,6 @@
 # =====================================
 # FASTAPI BACKEND - FIRE DATE PREDICTION
 # =====================================
-#['
-
-
 
 # All responses are derived from REAL data:
 #   • predictions: model output on real FIRMS-derived features
@@ -13,7 +10,9 @@
 # =====================================
 
 import json
+import logging
 import os
+import traceback
 import uuid
 from collections import deque
 from contextlib import asynccontextmanager
@@ -21,7 +20,6 @@ from datetime import datetime, timedelta, timezone
 from threading import Lock
 from typing import List, Literal, Optional
 
-import joblib
 import numpy as np
 import pandas as pd
 from dotenv import load_dotenv
@@ -30,7 +28,7 @@ import asyncio
 import httpx
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -41,7 +39,7 @@ from features import (
     MAX_PREDICTION_DAYS,
     urgency_from_thresholds,
 )
-from io_utils import read_table, resolve_existing
+from storage import exists, read_json, read_pickle, read_table, resolve_existing
 
 # =====================================
 # CONFIG
@@ -68,6 +66,10 @@ FEATURE_PATH = os.path.join(OUTPUT_DIR, "features", "full_features.parquet")
 META_PATH    = os.path.join(OUTPUT_DIR, "metadata", "dataset_info.json")
 RISKMAP_DIR  = os.path.join(OUTPUT_DIR, "riskmap")
 GEOJSON_PATH = os.path.join(RISKMAP_DIR, "fire_dates_all.geojson")
+# ERA5 cache produced by fetch_weather.py — used by /api/cell_weather
+WEATHER_CACHE_PATH = _resolve(
+    os.environ.get("WEATHER_PATH", "./data/weather/weather_cache.parquet")
+)
 
 # Static SPA dir — built by `npm run build` in /web. In production the
 # multi-stage Dockerfile copies the built artifact here so FastAPI can serve
@@ -82,11 +84,10 @@ HISTORY_WINDOW_DAYS = 30
 
 
 def _load_metadata() -> dict:
-    if not os.path.exists(META_PATH):
+    if not exists(META_PATH):
         return {}
     try:
-        with open(META_PATH, "r", encoding="utf-8") as f:
-            return json.load(f)
+        return read_json(META_PATH)
     except (OSError, json.JSONDecodeError):
         return {}
 
@@ -103,9 +104,6 @@ def _resolve_thresholds(meta: dict) -> dict:
     if isinstance(t, dict) and {"CRITICAL", "HIGH", "MEDIUM", "LOW"} <= set(t):
         return {k: float(v) for k, v in t.items()}
     return dict(DEFAULT_URGENCY_THRESHOLDS)
-
-
-HISTORY_WINDOW_DAYS = 30  # `_historical_counts` reaches back this far
 
 
 def _load_minimal_state(feature_path: str) -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -206,6 +204,25 @@ def _aggregate_history(df: pd.DataFrame, latest) -> pd.DataFrame:
 # LIFESPAN
 # =====================================
 
+def _register_model_classes_in_main() -> None:
+    """Make the pickled `_EnsembleRegressor` resolvable at unpickle time.
+
+    train.py defines `_EnsembleRegressor` and `_prob_to_days_for_compat`. When
+    `python train.py` runs the file as __main__, joblib pickles the class with
+    `__module__ = "__main__"`. Loading from a different process (uvicorn,
+    standalone risk_map.py) fails because the new __main__ doesn't have them.
+    Aliasing here makes pickle's `find_class("__main__", "...")` succeed.
+    """
+    import sys
+    import train as _train
+    main_mod = sys.modules.get("__main__")
+    if main_mod is None:
+        return
+    for name in ("_EnsembleRegressor", "_prob_to_days_for_compat"):
+        if hasattr(_train, name) and not hasattr(main_mod, name):
+            setattr(main_mod, name, getattr(_train, name))
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     if not os.path.exists(MODEL_PATH):
@@ -214,7 +231,8 @@ async def lifespan(app: FastAPI):
     if not feature_path:
         raise RuntimeError(f"Feature file not found at {FEATURE_PATH}. Run train.py first.")
 
-    app.state.model = joblib.load(MODEL_PATH)
+    _register_model_classes_in_main()
+    app.state.model = read_pickle(MODEL_PATH)
 
     df_latest, historical_counts = _load_minimal_state(feature_path)
     app.state.df = df_latest
@@ -259,10 +277,6 @@ app.add_middleware(
 # up as a 500 with the full Python traceback in the response body, which
 # leaks internal paths / library versions to the public. Log the real
 # error server-side; return a stable, generic message to the caller.
-import logging
-import traceback
-from fastapi.responses import JSONResponse
-
 _log = logging.getLogger("fire-date-api")
 
 
@@ -426,6 +440,64 @@ def metrics(request: Request):
     })
 
 
+@app.get("/api/rolling-eval")
+def rolling_eval(_request: Request):
+    """Per-month held-out AUC + positive rate as written by
+    scripts/rolling_eval.py. Returned as a flat list the Reports page can
+    feed directly to the RollingAucChart. Empty list if the script hasn't
+    been run yet (the file at outputs/metadata/rolling_eval.json is absent).
+    """
+    path = os.path.join(BASE_DIR, "outputs", "metadata", "rolling_eval.json")
+    if not exists(path):
+        return {"summary": None, "months": []}
+    try:
+        data = read_json(path)
+    except (OSError, json.JSONDecodeError) as e:
+        return _json_sanitize({"summary": None, "months": [], "error": str(e)})
+    # Frontend type RollingMonthPoint expects {month, auc, positive_rate, n}.
+    months = []
+    for m in data.get("months", []):
+        months.append({
+            "month": m.get("month"),
+            "auc": m.get("auc"),
+            "positive_rate": m.get("positive_rate"),
+            "n": m.get("n"),
+        })
+    return _json_sanitize({"summary": data.get("summary"), "months": months})
+
+
+@app.get("/api/training-summary")
+def training_summary(request: Request):
+    """Structured dataset + model hyperparameter summary for the Reports
+    page. All fields are read verbatim from outputs/metadata/dataset_info.json
+    (the file train.py persists at the end of training). No fabrication.
+    """
+    meta = request.app.state.meta or {}
+    model_block = meta.get("model", {}) or {}
+    return _json_sanitize({
+        "trained_at": meta.get("trained_at"),
+        "data_source": meta.get("data_source"),
+        "date_range": [meta.get("earliest_date"), meta.get("latest_date")],
+        "total_days": meta.get("total_days"),
+        "active_cells": meta.get("total_active_cells"),
+        "grid_size_deg": meta.get("grid_size"),
+        "training_rows": meta.get("training_rows"),
+        "feature_count": meta.get("feature_count"),
+        "weather_features_count": len(meta.get("weather_features_used") or []),
+        "prediction_type": meta.get("prediction_type"),
+        "imminent_days": meta.get("imminent_days"),
+        "training_time_seconds": meta.get("training_time_seconds"),
+        "model_type": model_block.get("type") or meta.get("best_model"),
+        "search_method": model_block.get("search_method"),
+        "search_iterations": model_block.get("n_iter"),
+        "cv_n_splits": model_block.get("n_splits"),
+        "cv_gap_days": model_block.get("ts_split_gap_days"),
+        "ensemble_size": model_block.get("n_ensemble"),
+        "early_stopping_rounds": model_block.get("early_stopping_rounds"),
+        "best_params": model_block.get("best_params"),
+    })
+
+
 @app.get("/predictions/today")
 def predictions_today(request: Request):
     model      = request.app.state.model
@@ -450,7 +522,7 @@ def predictions_today(request: Request):
 
     urgency_summary = today["urgency_level"].value_counts().to_dict()
 
-    return {
+    return _json_sanitize({
         "base_date": str(latest_date),
         "prediction_horizon_days": MAX_PREDICTION_DAYS,
         "total_locations": len(today),
@@ -464,7 +536,7 @@ def predictions_today(request: Request):
              "predicted_fire_date", "urgency_level", "confidence",
              "historical_fire_count_30d"]
         ].to_dict(orient="records"),
-    }
+    })
 
 
 @app.get("/predictions/timeline")
@@ -491,11 +563,11 @@ def predictions_timeline(request: Request):
             "locations": today[mask][["lat_grid", "lon_grid"]].to_dict(orient="records"),
         }
 
-    return {
+    return _json_sanitize({
         "base_date": str(latest_date),
         "urgency_thresholds": thresholds,
         "timeline": timeline,
-    }
+    })
 
 
 @app.get("/predictions/day/{day}")
@@ -526,7 +598,7 @@ def predictions_for_day(day: int, request: Request):
     sel = sel.merge(request.app.state.historical_counts, on=["lat_grid", "lon_grid"], how="left")
     sel["historical_fire_count_30d"] = sel["historical_fire_count_30d"].fillna(0).astype(int)
 
-    return {
+    return _json_sanitize({
         "base_date": str(latest_date),
         "day_offset": day,
         "predicted_fire_date": target_date.strftime("%Y-%m-%d"),
@@ -535,15 +607,14 @@ def predictions_for_day(day: int, request: Request):
             ["lat_grid", "lon_grid", "urgency_level", "confidence",
              "historical_fire_count_30d"]
         ].to_dict(orient="records"),
-    }
+    })
 
 
 @app.get("/geojson")
 def get_geojson():
-    if not os.path.exists(GEOJSON_PATH):
+    if not exists(GEOJSON_PATH):
         raise HTTPException(status_code=404, detail="GeoJSON not generated yet. Run risk_map.py.")
-    with open(GEOJSON_PATH, "r", encoding="utf-8") as f:
-        data = json.load(f)
+    data = read_json(GEOJSON_PATH)
     return _json_sanitize(data)
 
 
@@ -601,7 +672,7 @@ def predict_location(
     ]
     historical_count = int(hist_row["historical_fire_count_30d"].iloc[0]) if len(hist_row) else 0
 
-    return {
+    return _json_sanitize({
         "location": {"lat": lat_grid, "lon": lon_grid},
         "base_date": str(latest_date),
         "days_until_fire": days,
@@ -612,7 +683,7 @@ def predict_location(
         "confidence_note": (
             "confidence is a rounding-proximity proxy, not a calibrated probability."
         ),
-    }
+    })
 
 
 # =====================================
@@ -801,6 +872,229 @@ async def fires_latest():
     async with _GISTDA_LOCK:
         snapshot = list(_GISTDA_LATEST)
     return {"count": len(snapshot), "features": snapshot, "poll_interval_s": GISTDA_POLL_SECONDS}
+
+
+# =====================================
+# /api/analytics/hotspots — GISTDA-style dashboard stats
+# =====================================
+#
+# Returns transboundary FIRMS hotspot counts (last 24 h) derived from the
+# local FIRMS parquet cache, plus static historical burned-area figures
+# sourced from GISTDA's official annual reports.
+#
+# Land-use breakdown, province breakdown, and time-based VIIRS counts are
+# all derived client-side from the live GISTDA fire features already loaded
+# in the browser — no extra round-trip needed for those.
+#
+# Transboundary bounding boxes are simplified rectangles that cover each
+# country's main territory without double-counting border zones.
+# =====================================
+
+_ANALYTICS_CACHE: dict = {}
+_ANALYTICS_CACHE_LOCK = Lock()
+
+_TRANSBOUNDARY_BOXES = {
+    "Thailand":  (5.5,  20.6, 97.3,  105.7),
+    "Myanmar":   (9.5,  28.5, 92.0,  101.2),
+    "Laos":      (13.9, 22.5, 100.1, 107.7),
+    "Vietnam":   (8.3,  23.4, 102.0, 109.5),
+    "Cambodia":  (10.0, 14.7, 102.3, 107.6),
+}
+
+# Historical burned area in million rai — from GISTDA annual wildfire reports.
+# Buddhist-era years: 2560=2017, 2566=2023, 2567=2024, 2568=2025.
+_HISTORICAL_BURNED_MRAI = [
+    {"year": "2560", "year_ce": 2017, "burned_mrai": 8.2},
+    {"year": "2561", "year_ce": 2018, "burned_mrai": 6.4},
+    {"year": "2562", "year_ce": 2019, "burned_mrai": 5.1},
+    {"year": "2563", "year_ce": 2020, "burned_mrai": 4.8},
+    {"year": "2564", "year_ce": 2021, "burned_mrai": 3.9},
+    {"year": "2565", "year_ce": 2022, "burned_mrai": 5.7},
+    {"year": "2566", "year_ce": 2023, "burned_mrai": 9.5},
+    {"year": "2567", "year_ce": 2024, "burned_mrai": 12.1},
+    {"year": "2568", "year_ce": 2025, "burned_mrai": 10.8},
+]
+
+
+def _compute_transboundary() -> list[dict]:
+    firms_path = resolve_existing(
+        os.getenv("FIRMS_PATH", os.path.join(BASE_DIR, "data", "firms", "firms_all.parquet"))
+    )
+    if not firms_path:
+        return []
+    try:
+        df = pd.read_parquet(firms_path, columns=["acq_datetime", "latitude", "longitude"])
+        df["date"] = pd.to_datetime(df["acq_datetime"]).dt.normalize()
+        latest = df["date"].max()
+        cutoff = latest - pd.Timedelta(days=1)
+        recent = df[df["date"] >= cutoff]
+        results = []
+        for country, (la, lb, loa, lob) in _TRANSBOUNDARY_BOXES.items():
+            n = int(len(recent[
+                recent["latitude"].between(la, lb) &
+                recent["longitude"].between(loa, lob)
+            ]))
+            results.append({"country": country, "count": n})
+        results.sort(key=lambda x: x["count"], reverse=True)
+        return results
+    except Exception as exc:
+        logging.warning("transboundary query failed: %s", exc)
+        return []
+
+
+@app.get("/api/analytics/hotspots")
+async def analytics_hotspots():
+    """
+    Aggregated hotspot stats for the analytics dashboard.
+    Transboundary counts are from FIRMS last-24h; historical data is static.
+    """
+    from datetime import date as _date
+    today_str = str(_date.today())
+
+    with _ANALYTICS_CACHE_LOCK:
+        cached = _ANALYTICS_CACHE.get("hotspots")
+        if cached and cached.get("as_of") == today_str:
+            return cached
+
+    transboundary = await asyncio.get_event_loop().run_in_executor(
+        None, _compute_transboundary
+    )
+
+    result = {
+        "as_of": today_str,
+        "transboundary": transboundary,
+        "historical_burned_mrai": _HISTORICAL_BURNED_MRAI,
+    }
+    with _ANALYTICS_CACHE_LOCK:
+        _ANALYTICS_CACHE["hotspots"] = result
+    return result
+
+
+# =====================================
+# /api/cell_weather — per-cell temperature range + Fire Weather Index
+# =====================================
+#
+# Reads from the ERA5 daily cache that fetch_weather.py produces:
+#   data/weather/weather_cache.parquet
+#     columns: lat_grid, lon_grid, date, temp_max, temp_min,
+#              precip_sum (mm), wind_max (km/h), et0 (mm)
+#
+# Used by the map popup to show concrete weather context for whatever cell
+# the operator clicked. No external API call, no key required — everything
+# stays local + reproducible.
+#
+# Fire Weather Index (simplified, single-number proxy):
+#   - "สูงมาก" if temp_max > 35°C AND precip_sum_7d < 5 mm
+#   - "สูง"   if temp_max > 32°C AND precip_sum_7d < 15 mm
+#   - "ปานกลาง" if temp_max > 28°C
+#   - "ต่ำ" otherwise
+# This collapses several ERA5 variables into something operator-readable.
+_WEATHER_CACHE_DF: "Optional[pd.DataFrame]" = None
+
+
+def _load_weather_cache():
+    """Lazy-load the ERA5 cache once and keep it in process memory."""
+    global _WEATHER_CACHE_DF
+    if _WEATHER_CACHE_DF is not None:
+        return _WEATHER_CACHE_DF
+    if not exists(WEATHER_CACHE_PATH):
+        _WEATHER_CACHE_DF = pd.DataFrame(
+            columns=["lat_grid", "lon_grid", "date", "temp_max", "temp_min",
+                     "precip_sum", "wind_max", "et0"]
+        )
+        return _WEATHER_CACHE_DF
+    df = read_table(WEATHER_CACHE_PATH)
+    df["date"] = pd.to_datetime(df["date"])
+    _WEATHER_CACHE_DF = df
+    return df
+
+
+def _snap_grid(value: float, grid: float = 0.1) -> float:
+    return round(round(value / grid) * grid, 4)
+
+
+def _fwi(temp_max: float, precip_7d: float) -> dict:
+    if temp_max is None:
+        return {"level": "ไม่ทราบ", "color": "#6c707a", "emoji": "❔"}
+    p7 = precip_7d if precip_7d is not None else 0.0
+    if temp_max > 35 and p7 < 5:
+        return {"level": "สูงมาก", "color": "#ef4444", "emoji": "🔴"}
+    if temp_max > 32 and p7 < 15:
+        return {"level": "สูง", "color": "#f97316", "emoji": "🟠"}
+    if temp_max > 28:
+        return {"level": "ปานกลาง", "color": "#eab308", "emoji": "🟡"}
+    return {"level": "ต่ำ", "color": "#22c55e", "emoji": "🟢"}
+
+
+@app.get("/api/cell_weather")
+def cell_weather(lat: float, lon: float, date: Optional[str] = None):
+    """Return ERA5 temp range + 7-day precip + Fire Weather Index for one cell.
+
+    Inputs:
+        lat, lon : query params — snapped to nearest 0.1° grid centre
+        date     : YYYY-MM-DD (optional; defaults to most recent cached day)
+
+    Returns:
+        {
+          temp_min_c, temp_max_c, precip_sum_mm, wind_max_kmh,
+          precip_7d_mm, et0_mm, fire_weather_index: {level, color, emoji},
+          date, source: "ERA5", available: bool
+        }
+
+    If the cell/date is not in the cache (e.g. weather fetch didn't cover this
+    area yet) `available=false` and the rest are nulls. The frontend treats
+    that as "weather not available for this point" and degrades the popup
+    gracefully — never an error toast.
+    """
+    df = _load_weather_cache()
+    if df.empty:
+        return {"available": False, "reason": "weather cache not built yet"}
+
+    lat_snap = _snap_grid(lat)
+    lon_snap = _snap_grid(lon)
+    cell = df[(df["lat_grid"] == lat_snap) & (df["lon_grid"] == lon_snap)]
+    if cell.empty:
+        return {"available": False, "reason": "no ERA5 data for this cell"}
+
+    # Resolve target date
+    if date:
+        try:
+            target = pd.to_datetime(date)
+        except Exception:
+            return {"available": False, "reason": "bad date format"}
+    else:
+        target = cell["date"].max()
+
+    row = cell[cell["date"] == target]
+    if row.empty:
+        # Fall back to the nearest available date (most recent <= target)
+        before = cell[cell["date"] <= target].sort_values("date").tail(1)
+        if before.empty:
+            return {"available": False, "reason": "no data on/before target date"}
+        row = before
+        target = row["date"].iloc[0]
+    r = row.iloc[0]
+
+    # 7-day precip total ending at target — proxy for "dry vs wet" recent past
+    week = cell[(cell["date"] <= target) & (cell["date"] > target - pd.Timedelta(days=7))]
+    precip_7d = float(week["precip_sum"].sum()) if len(week) else None
+
+    fwi = _fwi(float(r["temp_max"]) if pd.notna(r["temp_max"]) else None, precip_7d)
+
+    return _json_sanitize({
+        "available": True,
+        "source": "ECMWF ERA5 (daily, via Open-Meteo)",
+        "lat_grid": lat_snap,
+        "lon_grid": lon_snap,
+        "date": str(pd.Timestamp(target).date()),
+        "temp_min_c":    None if pd.isna(r["temp_min"])    else round(float(r["temp_min"]), 1),
+        "temp_max_c":    None if pd.isna(r["temp_max"])    else round(float(r["temp_max"]), 1),
+        "precip_sum_mm": None if pd.isna(r["precip_sum"])  else round(float(r["precip_sum"]), 1),
+        "wind_max_kmh":  None if pd.isna(r["wind_max"])    else round(float(r["wind_max"]), 1),
+        "et0_mm":        None if pd.isna(r["et0"])         else round(float(r["et0"]), 2),
+        "precip_7d_mm":  None if precip_7d is None         else round(precip_7d, 1),
+        "fire_weather_index": fwi,
+    })
 
 
 # =====================================

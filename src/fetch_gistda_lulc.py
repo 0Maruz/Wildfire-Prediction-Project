@@ -63,6 +63,8 @@ from shapely.prepared import prep
 from shapely.strtree import STRtree
 from urllib3.util.retry import Retry
 
+from storage import write_table
+
 try:
     from pyproj import Transformer
     _HAS_PYPROJ = True
@@ -402,7 +404,7 @@ def run(dry_run: bool = False) -> None:
     # Only write cells that have at least one flag set (sparse output)
     result = base[base[all_flag_cols].any(axis=1)].reset_index(drop=True)
 
-    result.to_parquet(OUT_PATH, index=False)
+    write_table(result, OUT_PATH)
     log.info("Saved %d cells with LULC flags → %s", len(result), OUT_PATH)
     for fc, ac in zip(all_flag_cols, all_area_cols):
         count = result[fc].sum()
